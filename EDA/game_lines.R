@@ -8,7 +8,7 @@
 theme_set(theme_bw())
 
 ## create theme
-game_lines_theme <- function(){
+nfl_bar_theme <- function(){
   # theme
   theme(
     # adjust plot title
@@ -114,7 +114,7 @@ team_totals |>
     linetype = "dashed"
   ) +
   # apply custom theme
-  game_lines_theme()
+  nfl_bar_theme()
 
 
 ### plot
@@ -161,7 +161,7 @@ team_totals |>
     linetype = "dashed"
   ) +
   # apply custom theme
-  game_lines_theme()
+  nfl_bar_theme()
 
 
 ## difference between O/U and total score for each season
@@ -205,7 +205,7 @@ team_totals |>
   # facet wrap
   facet_wrap(~ season) +
   # apply custom theme
-  game_lines_theme()
+  nfl_bar_theme()
 
 
 ## average difference between O/U and total score for each team
@@ -247,4 +247,4 @@ team_totals |>
     linetype = "dashed"
   ) +
   # apply custom theme
-  game_lines_theme()
+  nfl_bar_theme()
