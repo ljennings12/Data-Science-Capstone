@@ -1,0 +1,165 @@
+## Liam Jennings
+## Data Science Capstone
+
+# Libraries and Functions -------------------------------------------------
+
+library(nflreadr)
+library(tidyverse)
+
+# Defensive Metrics -------------------------------------------------------
+
+## calculate average time of possession per game
+t_o_p_defense <- pbp_24 |> 
+  filter(
+    # regular season
+    season_type == "REG",
+    # remove plays that were blown dead
+    play_type != "no_play",
+    # plays that are not two point attempts
+    two_point_attempt == 0,
+    # remove extra points
+    special == 0
+  ) |>
+  # mutate
+  mutate(
+    # create artificial number of possessions variable
+    possession = paste(drive, "-", fixed_drive_result),
+    
+    # call posteam by team (for plotting purposes in nflplotr)
+    team = defteam,
+    
+    # time of possession in seconds
+    time_of_possession_sec = as.numeric(
+      ms(
+        drive_time_of_possession
+      )
+    )
+  ) |> 
+  # group by team, week, and possession
+  group_by(
+    game_id,
+    team, 
+    week,
+    possession
+  ) |> 
+  # summarize
+  summarize(
+    # average time of possession in seconds
+    avg_drive_time_of_possession_sec = mean(time_of_possession_sec)
+  ) |> 
+  # ungroup
+  ungroup() |> 
+  # group by team and week
+  group_by(
+    team, 
+    week
+  ) |> 
+  # summarize
+  summarize(
+    # average time of possession for each game and week in seconds
+    avg_time_of_possession_sec = sum(avg_drive_time_of_possession_sec),
+    
+    # average drive time of possession for each game and week in seconds
+    avg_drive_time = mean(avg_drive_time_of_possession_sec)
+  ) |> 
+  mutate(
+    # sequence along to get cumulative average
+    avg_time_of_possession_sec = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
+    
+    # convert average time of possession back to minutes and seconds for visual
+    avg_time_of_possession = seconds_to_period(avg_time_of_possession_sec),
+    
+    # sequence along to get cumulative average
+    avg_drive_time_sec = cumsum(avg_drive_time) / seq_along(avg_drive_time),
+    
+    # convert average time of possession back to minutes and seconds for visual
+    avg_drive_time = seconds_to_period(avg_drive_time_sec)
+  ) |> 
+  # ungroup
+  ungroup() |> 
+  # select
+  select(
+    team,
+    week,
+    avg_drive_time_sec, 
+    avg_drive_time,
+    avg_time_of_possession_sec,
+    avg_time_of_possession
+  )
+
+
+## get offensive statistics
+defensive_metrics <- pbp_24 |> 
+  filter(
+    # regular season
+    season_type == "REG",
+    # real plays
+    play == 1 |
+      # QB kneels
+      qb_kneel == 1,
+    # remove plays that were blown dead
+    play_type != "no_play",
+    # plays that are not two point attempts
+    two_point_attempt == 0
+  ) |>
+  mutate(
+    # create artificial number of possessions variable
+    possession = paste(drive, "-", fixed_drive_result),
+    
+    # call posteam by team (for plotting purposes in nflplotr)
+    team = defteam
+  ) |> 
+  # group by week
+  group_by(game_id, team, week) |> 
+  # calculate offensive statistics
+  summarize(
+    # total yards allowed
+    total_yards_allowed = sum(yards_gained),
+    # total passing yards allowed - does not include loss of yards from sacks
+    total_pass_yards_allowed = sum(passing_yards, na.rm = TRUE),
+    # total rushing yards allowed
+    total_rush_yards_allowed = sum(rushing_yards, na.rm = TRUE),
+    # points per game allowed
+    points_allowed = last(posteam_score),
+    # pass rate
+    opposing_pass_rate = mean(pass),
+    # rush rate
+    opposing_rush_rate = sum(rush + qb_kneel) / n(),
+    # pass rate over expected (PROE)
+    opposing_proe = mean(pass) - mean(xpass, na.rm = TRUE),
+    # expected points added (EPA)
+    epa_allowed = mean(epa, na.rm = TRUE),
+    # giveaways
+    takeaways = sum(interception) + sum(fumble_lost),
+    # number of possessions
+    possession_allowed = n_distinct(possession)
+  ) |> 
+  # average statistics going into the match up
+  mutate(
+    # average total yards
+    avg_total_yards_allowed = cumsum(total_yards_allowed) / seq_along(total_yards_allowed),
+    # average total passing yards
+    avg_total_pass_yards_allowed = cumsum(total_pass_yards_allowed) / seq_along(total_pass_yards_allowed),
+    # average total rushing yards
+    avg_total_rush_yards_allowed = cumsum(total_rush_yards_allowed) / seq_along(total_rush_yards_allowed),
+    # points per game
+    ppg_allowed = cumsum(points_allowed) / seq_along(points_allowed),
+    # series per game (figure out how to calculate this and time of possession)
+    possessions_per_game_allowed = cumsum(possession_allowed) / seq_along(possession_allowed),
+    # pass rate
+    opposing_pass_rate = cumsum(opposing_pass_rate) / seq_along(opposing_pass_rate),
+    # rush rate
+    opposing_rush_rate = cumsum(opposing_rush_rate) / seq_along(opposing_rush_rate),
+    # pass rate over expected (PROE)
+    opposing_proe = cumsum(opposing_proe) / seq_along(opposing_proe),
+    # expected points added (EPA)
+    epa_allowed = cumsum(epa_allowed) / seq_along(epa_allowed),
+    # giveaways per game
+    takeaways_per_game = cumsum(takeaways) / seq_along(takeaways),
+    # points per possession
+    points_allowed_per_poss = ppg_allowed / possessions_per_game_allowed
+  ) |> 
+  # join time of possession to dataset
+  inner_join(
+    t_o_p_defense
+  )
