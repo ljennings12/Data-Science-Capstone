@@ -7,14 +7,16 @@
 # Offensive Metrics ---------------------------------------------------------
 
 ## calculate average time of possession per game
-top <- pbp_24 |> 
+t_o_p <- pbp_24 |> 
   filter(
     # regular season
     season_type == "REG",
     # remove plays that were blown dead
     play_type != "no_play",
     # plays that are not two point attempts
-    two_point_attempt == 0
+    two_point_attempt == 0,
+    # remove extra points
+    special == 0
   ) |>
   # mutate
   mutate(
@@ -31,8 +33,9 @@ top <- pbp_24 |>
       )
     )
   ) |> 
-  # group by team, week, and possession
+  # group by game ID, team, week, and possession
   group_by(
+    game_id,
     team, 
     week,
     possession
@@ -105,7 +108,7 @@ offensive_metrics <- pbp_24 |>
     team = posteam
   ) |> 
   # group by week
-  group_by(team, week) |> 
+  group_by(game_id, team, week) |> 
   # calculate offensive statistics
   summarize(
     # total yards
@@ -160,7 +163,7 @@ offensive_metrics <- pbp_24 |>
   ) |> 
   # join time of possession to dataset
   inner_join(
-    top
+    t_o_p
   )
 
 
@@ -169,18 +172,16 @@ offensive_metrics <- pbp_24 |>
 # Defensive Metrics -------------------------------------------------------
 
 ## calculate average time of possession per game
-top_defense <- pbp_24 |> 
+t_o_p_defense <- pbp_24 |> 
   filter(
     # regular season
     season_type == "REG",
-    # real plays
-    play == 1 |
-    # QB kneels
-    qb_kneel == 1,
     # remove plays that were blown dead
     play_type != "no_play",
     # plays that are not two point attempts
-    two_point_attempt == 0
+    two_point_attempt == 0,
+    # remove extra points
+    special == 0
   ) |>
   # mutate
   mutate(
@@ -199,6 +200,7 @@ top_defense <- pbp_24 |>
   ) |> 
   # group by team, week, and possession
   group_by(
+    game_id,
     team, 
     week,
     possession
@@ -271,7 +273,7 @@ defensive_metrics <- pbp_24 |>
     team = defteam
   ) |> 
   # group by week
-  group_by(team, week) |> 
+  group_by(game_id, team, week) |> 
   # calculate offensive statistics
   summarize(
     # total yards allowed
@@ -322,6 +324,106 @@ defensive_metrics <- pbp_24 |>
   ) |> 
   # join time of possession to dataset
   inner_join(
-    top_defense
+    t_o_p_defense
   )
 
+
+
+
+# Independent Metrics -------------------------------------------------------
+
+independent_metrics <- {
+  pbp_24 |> 
+    # group by game
+    group_by(game_id, home_team, away_team, week) |> 
+    # summarize
+    summarize(
+      roof = first(roof),
+      temperature = first(temp),
+      wind = first(wind),
+      weather = last(weather),
+      time_of_kickoff = first(time_of_day, na_rm = TRUE)
+    ) |> 
+    # mutate
+    mutate(
+      # parse the ISO 8601 string properly to strip milliseconds and handle the time zone
+      time_of_kickoff = ymd_hms(sub("\\.\\d+Z$", "", time_of_kickoff), tz = "UTC"),
+      
+      # add time zone to the dataset
+      home_timezone = case_when(
+        # Eastern Time Zone
+        home_team %in% c(
+          "ATL", "BAL", "BUF", "CAR", "CIN", "CLE", 
+          "DET", "IND", "JAX", "MIA", "NE", "NYG",
+          "NYJ", "PHI", "PIT", "TB", "WAS"
+        ) ~ "US/Eastern",
+        
+        # Central Time Zone
+        home_team %in% c(
+          "CHI", "DAL", "GB", "HOU", "KC", "MIN", "NO", "TEN"
+        ) ~ "US/Central",
+        
+        # Mountain Time Zone
+        home_team %in% c(
+          "DEN"
+        ) ~ "US/Mountain",
+        
+        # Arizona
+        home_team %in% c(
+          "ARI"
+        ) ~ "US/Arizona",
+        
+        # Pacific
+        home_team %in% c(
+          "LA", "LAC", "LV", "SEA", "SF"
+        ) ~ "US/Pacific"
+      ),
+      
+      # add time zone to the dataset
+      away_timezone = case_when(
+        # Eastern Time Zone
+        away_team %in% c(
+          "ATL", "BAL", "BUF", "CAR", "CIN", "CLE", 
+          "DET", "IND", "JAX", "MIA", "NE", "NYG",
+          "NYJ", "PHI", "PIT", "TB", "WAS"
+        ) ~ "US/Eastern",
+        
+        # Central Time Zone
+        away_team %in% c(
+          "CHI", "DAL", "GB", "HOU", "KC", "MIN", "NO", "TEN"
+        ) ~ "US/Central",
+        
+        # Mountain Time Zone
+        away_team %in% c(
+          "DEN"
+        ) ~ "US/Mountain",
+        
+        # Arizona
+        away_team %in% c(
+          "ARI"
+        ) ~ "US/Arizona",
+        
+        # Pacific
+        away_team %in% c(
+          "LA", "LAC", "LV", "SEA", "SF"
+        ) ~ "US/Pacific"
+      ),
+      
+      # eastern kickoff time with specified time zone
+      eastern_kickoff_time = format(
+        with_tz(time_of_kickoff, tzone = "US/Eastern"),
+        "%I:%M:%S %p"
+      ),
+      
+      # local kickoff time with specified time zone
+      local_kickoff_time = with_tz(time_of_kickoff, tzone = home_timezone),  
+      
+      # away team kickoff time with specified time zone
+      away_team_kickoff_time = with_tz(time_of_kickoff, tzone = away_timezone)  
+      
+      # extract the time of day
+      #time_of_kickoff = hms::as_hms(time_of_kickoff)
+    ) |> 
+    # ungroup
+    ungroup()
+}
