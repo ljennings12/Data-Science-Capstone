@@ -2,12 +2,14 @@
 ## Data Science Capstone
 
 
-# DATA COLLECTION ---------------------------------------------------------------------
+# Libraries ---------------------------------------------------------------------
 
 ## libraries
 library(nflreadr)
 library(tidyverse)
-library(nflplotR)
+
+
+# Game Lines --------------------------------------------------------------
 
 ## read in data
 ### NFL 2024 play-by-play
