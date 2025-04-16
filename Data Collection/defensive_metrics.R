@@ -74,16 +74,16 @@ t_o_p_defense <- {
     group_by(team) |> 
     mutate(
       # sequence along to get cumulative average
-      avg_time_of_possession_sec = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
+      avg_time_of_possession_sec_allowed = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
       
       # convert average time of possession back to minutes and seconds for visual
-      avg_time_of_possession = seconds_to_period(avg_time_of_possession_sec),
+      avg_time_of_possession_allowed = seconds_to_period(avg_time_of_possession_sec_allowed),
       
       # sequence along to get cumulative average
-      avg_drive_time_sec = cumsum(avg_drive_time) / seq_along(avg_drive_time),
+      avg_drive_time_sec_allowed = cumsum(avg_drive_time) / seq_along(avg_drive_time),
       
       # convert average time of possession back to minutes and seconds for visual
-      avg_drive_time = seconds_to_period(avg_drive_time_sec)
+      avg_drive_time_allowed = seconds_to_period(avg_drive_time_sec_allowed)
     ) |> 
     # ungroup
     ungroup() |> 
@@ -92,10 +92,10 @@ t_o_p_defense <- {
       game_id,
       team,
       week,
-      avg_drive_time_sec, 
-      avg_drive_time,
-      avg_time_of_possession_sec,
-      avg_time_of_possession
+      avg_drive_time_sec_allowed, 
+      avg_drive_time_allowed,
+      avg_time_of_possession_sec_allowed,
+      avg_time_of_possession_allowed
     )
 }
 
