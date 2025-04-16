@@ -33,6 +33,8 @@ game_totals_24 <- {
     filter(
       # regular season
       season_type == "REG",
+      # remove international games
+      location == "Home"
     ) |> 
     # group by game, teams, and weeks
     group_by(game_id, season, home_team, away_team, week) |> 
@@ -59,6 +61,8 @@ game_totals_23 <- {
     filter(
       # regular season
       season_type == "REG",
+      # remove international games
+      location == "Home"
     ) |> 
     # group by game, teams, and weeks
     group_by(game_id, season, home_team, away_team, week) |> 
@@ -85,6 +89,8 @@ game_totals_22 <- {
     filter(
       # regular season
       season_type == "REG",
+      # remove international games
+      location == "Home"
     ) |> 
     # group by game, teams, and weeks
     group_by(game_id, season, home_team, away_team, week) |> 
@@ -114,6 +120,8 @@ game_totals_21 <- {
     filter(
       # regular season
       season_type == "REG",
+      # remove international games
+      location == "Home"
     ) |> 
     # group by game, teams, and weeks
     group_by(game_id, season, home_team, away_team, week) |> 
