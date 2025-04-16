@@ -14,6 +14,7 @@ independent_metrics <- {
     filter(
       # regular season
       season_type == "REG",
+      
       # remove international games
       location == "Home"
     ) |> 

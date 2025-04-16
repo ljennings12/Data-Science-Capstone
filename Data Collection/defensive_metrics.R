@@ -15,12 +15,16 @@ t_o_p_defense <- {
     filter(
       # regular season
       season_type == "REG",
+      
       # remove international games
       location == "Home",
+      
       # remove plays that were blown dead
       play_type != "no_play",
+      
       # plays that are not two point attempts
       two_point_attempt == 0,
+      
       # remove extra points
       special == 0
     ) |>
@@ -104,14 +108,18 @@ defensive_metrics <- {
     filter(
       # regular season
       season_type == "REG",
+      
       # remove international games
       location == "Home",
+      
       # real plays
       play == 1 |
       # QB kneels
       qb_kneel == 1,
+      
       # remove plays that were blown dead
       play_type != "no_play",
+      
       # plays that are not two point attempts
       two_point_attempt == 0
     ) |>
@@ -128,22 +136,31 @@ defensive_metrics <- {
     summarize(
       # total yards allowed
       total_yards_allowed = sum(yards_gained),
+      
       # total passing yards allowed - does not include loss of yards from sacks
       total_pass_yards_allowed = sum(passing_yards, na.rm = TRUE),
+      
       # total rushing yards allowed
       total_rush_yards_allowed = sum(rushing_yards, na.rm = TRUE),
+      
       # points per game allowed
       points_allowed = last(posteam_score),
+      
       # pass rate
       opposing_pass_rate = mean(pass),
+      
       # rush rate
       opposing_rush_rate = sum(rush + qb_kneel) / n(),
+      
       # pass rate over expected (PROE)
       opposing_proe = mean(pass) - mean(xpass, na.rm = TRUE),
+      
       # expected points added (EPA)
       epa_allowed = mean(epa, na.rm = TRUE),
+      
       # giveaways
       takeaways = sum(interception) + sum(fumble_lost),
+      
       # number of possessions
       possession_allowed = n_distinct(possession)
     ) |> 
@@ -151,24 +168,34 @@ defensive_metrics <- {
     mutate(
       # average total yards
       avg_total_yards_allowed = cumsum(total_yards_allowed) / seq_along(total_yards_allowed),
+      
       # average total passing yards
       avg_total_pass_yards_allowed = cumsum(total_pass_yards_allowed) / seq_along(total_pass_yards_allowed),
+      
       # average total rushing yards
       avg_total_rush_yards_allowed = cumsum(total_rush_yards_allowed) / seq_along(total_rush_yards_allowed),
+      
       # points per game
       ppg_allowed = cumsum(points_allowed) / seq_along(points_allowed),
+      
       # series per game (figure out how to calculate this and time of possession)
       possessions_per_game_allowed = cumsum(possession_allowed) / seq_along(possession_allowed),
+      
       # pass rate
       opposing_pass_rate = cumsum(opposing_pass_rate) / seq_along(opposing_pass_rate),
+      
       # rush rate
       opposing_rush_rate = cumsum(opposing_rush_rate) / seq_along(opposing_rush_rate),
+      
       # pass rate over expected (PROE)
       opposing_proe = cumsum(opposing_proe) / seq_along(opposing_proe),
+      
       # expected points added (EPA)
       epa_allowed = cumsum(epa_allowed) / seq_along(epa_allowed),
+      
       # giveaways per game
       takeaways_per_game = cumsum(takeaways) / seq_along(takeaways),
+      
       # points per possession
       points_allowed_per_poss = ppg_allowed / possessions_per_game_allowed
     ) |> 
