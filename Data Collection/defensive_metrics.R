@@ -16,9 +16,6 @@ t_o_p_defense <- {
       # regular season
       season_type == "REG",
       
-      # remove international games
-      location == "Home",
-      
       # remove plays that were blown dead
       play_type != "no_play",
       
@@ -71,6 +68,10 @@ t_o_p_defense <- {
       # average drive time of possession for each game and week in seconds
       avg_drive_time = mean(avg_drive_time_of_possession_sec)
     ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team
+    group_by(team) |> 
     mutate(
       # sequence along to get cumulative average
       avg_time_of_possession_sec = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
@@ -108,9 +109,6 @@ defensive_metrics <- {
     filter(
       # regular season
       season_type == "REG",
-      
-      # remove international games
-      location == "Home",
       
       # real plays
       play == 1 |
@@ -164,6 +162,10 @@ defensive_metrics <- {
       # number of possessions
       possession_allowed = n_distinct(possession)
     ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team
+    group_by(team) |> 
     # average statistics going into the match up
     mutate(
       # average total yards
@@ -199,6 +201,8 @@ defensive_metrics <- {
       # points per possession
       points_allowed_per_poss = ppg_allowed / possessions_per_game_allowed
     ) |> 
+    # ungroup
+    ungroup() |> 
     # join time of possession to dataset
     inner_join(
       t_o_p_defense

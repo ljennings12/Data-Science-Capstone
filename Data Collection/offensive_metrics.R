@@ -17,9 +17,6 @@ t_o_p <- {
       # regular season
       season_type == "REG",
       
-      # remove international games
-      location == "Home",
-      
       # remove plays that were blown dead
       play_type != "no_play",
       
@@ -72,6 +69,10 @@ t_o_p <- {
       # average drive time of possession for each game and week in seconds
       avg_drive_time = mean(avg_drive_time_of_possession_sec)
     ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team
+    group_by(team) |> 
     mutate(
       # sequence along to get cumulative average
       avg_time_of_possession_sec = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
@@ -109,9 +110,6 @@ offensive_metrics <- {
     filter(
       # regular season
       season_type == "REG",
-      
-      # remove international games
-      location == "Home",
       
       # real plays
       play == 1 |
@@ -168,6 +166,10 @@ offensive_metrics <- {
       # divisional game
       div_game = last(div_game)
     ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team
+    group_by(team) |> 
     # average statistics going into the match up
     mutate(
       # average total yards
@@ -180,7 +182,8 @@ offensive_metrics <- {
       avg_total_rush_yards = cumsum(total_rush_yards) / seq_along(total_rush_yards),
       
       # points per game
-      ppg = cumsum(points) / seq_along(points),
+      ppg = cumsum(points) / row_number(),
+      
       # series per game (figure out how to calculate this and time of possession)
       possessions_per_game = cumsum(possession) / seq_along(possession),
       
@@ -202,6 +205,8 @@ offensive_metrics <- {
       # points per possession
       points_per_poss = ppg / possessions_per_game
     ) |> 
+    # ungroup
+    ungroup() |> 
     # join time of possession to dataset
     inner_join(
       t_o_p
