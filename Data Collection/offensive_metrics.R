@@ -7,14 +7,17 @@
 library(nflreadr)
 library(tidyverse)
 
-# Offensive Metrics ---------------------------------------------------------
+
+# Time of Possession ------------------------------------------------------
 
 ## calculate average time of possession per game
 t_o_p <- {
-    pbp_24 |> 
+  play_by_play |> 
     filter(
       # regular season
       season_type == "REG",
+      # remove international games
+      location == "Home",
       # remove plays that were blown dead
       play_type != "no_play",
       # plays that are not two point attempts
@@ -53,6 +56,7 @@ t_o_p <- {
     ungroup() |> 
     # group by team and week
     group_by(
+      game_id,
       team, 
       week
     ) |> 
@@ -81,6 +85,7 @@ t_o_p <- {
     ungroup() |> 
     # select
     select(
+      game_id,
       team,
       week,
       avg_drive_time_sec, 
@@ -90,12 +95,18 @@ t_o_p <- {
     )
 }
 
+
+
+# Offensive Metrics -------------------------------------------------------
+
 ## get offensive statistics
 offensive_metrics <- {
-    pbp_24 |> 
+  play_by_play |> 
     filter(
       # regular season
       season_type == "REG",
+      # remove international games
+      location == "Home",
       # real plays
       play == 1 |
       # QB kneels
