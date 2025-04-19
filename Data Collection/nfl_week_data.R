@@ -50,7 +50,7 @@ offensive_metrics_reshape <- {
       week = week_home_team,
       div_game = div_game_away_team,
       pass_rate_away_team:epa_home_team,
-      avg_total_yards_home_team:avg_time_of_possession_home_team
+      avg_total_yards_away_team:avg_time_of_possession_home_team
     )
 }
 
