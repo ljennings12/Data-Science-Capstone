@@ -1,6 +1,12 @@
 ## Liam Jennings
 ## Data Science Capstone
 
+# Libraries and Functions -------------------------------------------------
+
+library(nflreadr)
+library(tidyverse)
+library(nflplotR)
+
 
 # Offensive Metrics EDA -------------------------------------------------------
 
