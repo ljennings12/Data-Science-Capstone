@@ -43,6 +43,7 @@ t_o_p_defense <- {
     # group by team, week, and possession
     group_by(
       game_id,
+      season,
       team, 
       week,
       possession
@@ -57,6 +58,7 @@ t_o_p_defense <- {
     # group by team and week
     group_by(
       game_id,
+      season,
       team, 
       week
     ) |> 
@@ -71,7 +73,7 @@ t_o_p_defense <- {
     # ungroup
     ungroup() |> 
     # group by team
-    group_by(team) |> 
+    group_by(team, season) |> 
     mutate(
       # sequence along to get cumulative average
       avg_time_of_possession_sec_allowed = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
@@ -129,7 +131,7 @@ defensive_metrics <- {
       team = defteam
     ) |> 
     # group by week
-    group_by(game_id, team, week) |> 
+    group_by(game_id, season, team, week) |> 
     # calculate offensive statistics
     summarize(
       # total yards allowed
@@ -164,8 +166,8 @@ defensive_metrics <- {
     ) |> 
     # ungroup
     ungroup() |> 
-    # group by team
-    group_by(team) |> 
+    # group by team and season
+    group_by(team, season) |> 
     # average statistics going into the match up
     mutate(
       # average total yards
@@ -208,3 +210,24 @@ defensive_metrics <- {
       t_o_p_defense
     )
 }
+
+
+
+# Lagged Metrics ------------------------------------------------------------
+
+defensive_metrics_lagged <- defensive_metrics |> 
+  # order dataset
+  arrange(team, season, week) |> 
+  # group by team and season
+  group_by(team, season) |> 
+  mutate(
+    # apply lag function across certain columns
+    across(
+      # columns
+      c(opposing_pass_rate:epa_allowed, avg_total_yards_allowed:avg_time_of_possession_allowed),
+      # lag function
+      lag
+    )
+  ) |> 
+  # ungroup
+  ungroup()
