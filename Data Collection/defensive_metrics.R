@@ -230,4 +230,6 @@ defensive_metrics_lagged <- defensive_metrics |>
     )
   ) |> 
   # ungroup
-  ungroup()
+  ungroup() |> 
+  # remove week 1
+  drop_na(opposing_pass_rate)
