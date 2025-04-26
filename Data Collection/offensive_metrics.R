@@ -221,23 +221,50 @@ offensive_metrics <- {
 
 # Lagged Metrics ------------------------------------------------------------
 
-offensive_metrics_lagged <- offensive_metrics |> 
-  # order dataset
-  arrange(team, season, week) |> 
-  # group by team and season
-  group_by(team, season) |> 
-  mutate(
-    # apply lag function across certain columns
-    across(
-      # columns
-      c(pass_rate:epa, avg_total_yards:avg_time_of_possession),
-      # lag function
-      lag
-    )
-  ) |> 
-  # ungroup
-  ungroup() |> 
-  # remove week 1
-  drop_na(pass_rate)
-
+offensive_metrics_lagged <- {
+  offensive_metrics |> 
+    # order dataset
+    arrange(team, season, week) |> 
+    # group by team and season
+    group_by(team, season) |> 
+    mutate(
+      # apply lag function across certain columns
+      across(
+        # columns
+        c(pass_rate:epa, avg_total_yards:avg_time_of_possession),
+        # lag function
+        lag
+      ),
+      
+      # calculate moving average of the last 4 weeks
+      across(
+        # columns
+        c(pass_rate:epa, avg_total_yards:avg_time_of_possession),
+        # moving average function
+        ~ zoo::rollapplyr(
+          # data
+          .x,
+          
+          # width
+          width = 4,
+          
+          # function
+          FUN = mean,
+          
+          # fill
+          fill = NA,
+          
+          # align
+          align = "right"
+        ),
+        
+        # column names
+        .names = "{.col}_ma4"
+      )
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # remove week 1
+    drop_na(pass_rate)
+}
 
