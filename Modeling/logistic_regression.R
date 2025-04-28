@@ -9,81 +9,10 @@ library(glmnet)
 library(broom)
 
 
-# Original Logistic Regression -----------------------------------------------------
-
-## set a seed
-set.seed(8029)
-
-## training data
-train <- nfl_team_week_data |>
-  # 70% training set
-  slice_sample(prop = 0.70)
-
-
-## testing set
-test <- nfl_team_week_data |> 
-  anti_join(train)
-
-## initial model
-model <- glm(
-  # formula
-  over ~ div_game + 
-    pass_rate_home_team:opposing_pass_rate_away_team + 
-    pass_rate_away_team:opposing_pass_rate_home_team + 
-    epa_home_team:epa_allowed_away_team +
-    epa_away_team:epa_allowed_home_team +
-    avg_total_yards_home_team:avg_total_yards_allowed_away_team +
-    avg_total_yards_away_team:avg_total_yards_allowed_home_team +
-    ppg_home_team:ppg_allowed_away_team +
-    ppg_away_team:ppg_allowed_home_team +
-    possessions_per_game_home_team:possessions_per_game_allowed_away_team +
-    possessions_per_game_away_team:possessions_per_game_allowed_home_team +
-    hour_time_difference,
-  
-  # data 
-  data = train,
-  
-  # family
-  family = "binomial"
-)
-
-
-## summary
-summary(model)
-
-
-## variables
-model |> 
-  tidy()
-
-
-## exponentiate coefficient estimates to get odds
-model |> 
-  tidy(conf.int = TRUE, exponentiate = TRUE)
-
-
-
-## predict probabilities of test set
-### predictions
-model_pred_prob <- predict(model, newdata = data.frame(test), type = "response")
-
-### predict the class
-model_pred_class <- ifelse(model_pred_prob > 0.5, "Over", "Under")
-
-
-## model assessment
-### confusion matrix
-table("Predicted" = model_pred_class, "Observed" = test$over)
-
-### Accuracy ~ 47%
-
-
-
-
-# Second Logistic Regression ----------------------------------------------
+## data
 
 ## create difference variables
-nfl_logit_data <- {
+nfl_model_data <- {
   nfl_team_week_data |> 
     # mutate
     mutate(
@@ -137,199 +66,7 @@ nfl_logit_data <- {
       net_proe = proe_home_team - opposing_proe_away_team,
       
       # difference in opposing pass rate over expected
-      net_opposing = opposing_proe_home_team - proe_away_team
-    ) |> 
-    # select columns to use in modeling
-    select(
-      game_id,
-      season,
-      week,
-      home_team,
-      away_team,
-      over,
-      div_game,
-      hour_time_difference,
-      starts_with("net_")
-    )
-}  
-
-
-## set a seed
-set.seed(8029)
-
-## training data
-train <- nfl_logit_data |>
-  # 2021 - 2023
-  filter(
-    season != 2024
-  ) |> 
-  # remove season and game ID
-  select(
-    -c(game_id:away_team)
-  )
-
-
-## testing set
-test <- nfl_logit_data |> 
-  anti_join(train)
-
-## initial model
-nfl_logit_model <- glm(
-  # formula
-  over ~ .,
-  
-  # data 
-  data = train,
-  
-  # family
-  family = "binomial"
-)
-
-
-## summary
-summary(nfl_logit_model)
-
-
-## variables
-nfl_logit_model |> 
-  tidy()
-
-
-## exponentiate coefficient estimates to get odds
-nfl_logit_model |> 
-  tidy(conf.int = TRUE, exponentiate = TRUE)
-
-
-
-## predict probabilities of test set
-### predictions
-model_pred_prob <- predict(nfl_logit_model, newdata = data.frame(test), type = "response")
-
-### predict the class
-model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
-
-
-## model assessment
-### confusion matrix
-tibble(
-  actual = test$over,
-  predicted = model_pred_class
-) |> 
-  summarize(
-    accuracy = mean(actual == predicted)
-  )
-
-### Accuracy ~ 46.4%
-
-
-
-## improve model
-nfl_logit_model_2 <- glm(
-  # formula
-  over ~ net_offensive_yards + net_defensive_yards + net_offensive_possessions + net_takeaways + net_epa,
-  
-  # data 
-  data = train,
-  
-  # family
-  family = "binomial"
-)
-
-
-## summary
-summary(nfl_logit_model_2)
-
-
-## variables
-nfl_logit_model_2 |> 
-  tidy()
-
-
-## predict probabilities of test set
-### predictions
-model_pred_prob <- predict(nfl_logit_model_2, newdata = data.frame(test), type = "response")
-
-### predict the class
-model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
-
-
-## model assessment
-### confusion matrix
-tibble(
-  actual = test$over,
-  predicted = model_pred_class
-) |> 
-  summarize(
-    accuracy = mean(actual == predicted)
-  )
-
-
-## Accuracy: 46.8%
-
-
-
-# Points Logistic Regression ----------------------------------------------
-
-## improve model
-nfl_logit_model_points <- glm(
-  # formula
-  over ~ net_ppg + net_ppg_allowed,
-  
-  # data 
-  data = train,
-  
-  # family
-  family = "binomial"
-)
-
-
-## summary
-summary(nfl_logit_model_points)
-
-
-## variables
-nfl_logit_model_points |> 
-  tidy()
-
-
-## predict probabilities of test set
-### predictions
-model_pred_prob <- predict(nfl_logit_model_points, newdata = data.frame(test), type = "response")
-
-### predict the class
-model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
-
-
-## model assessment
-### confusion matrix
-tibble(
-  actual = test$over,
-  predicted = model_pred_class
-) |> 
-  summarize(
-    accuracy = mean(actual == predicted)
-  )
-
-
-## Accuracy: 47.2%
-
-
-# Moving Average Logistic Regression ----------------------------------------------
-
-## create difference variables
-nfl_logit_ma4_data <- {
-  nfl_team_week_data |> 
-    # mutate
-    mutate(
-      # have team as a factor
-      home_team = factor(home_team),
-      away_team = factor(away_team),
-      
-      # have divisional game as a factor
-      div_game = factor(div_game),
-      
-      # have hour time difference as a factor
-      hour_time_difference = factor(hour_time_difference),
+      net_opposing_proe = opposing_proe_home_team - proe_away_team,
       
       # difference in points scored
       net_ppg_ma4 = ppg_ma4_home_team - ppg_allowed_ma4_away_team,
@@ -371,7 +108,72 @@ nfl_logit_ma4_data <- {
       net_proe_ma4 = proe_ma4_home_team - opposing_proe_ma4_away_team,
       
       # difference in opposing pass rate over expected
-      net_opposing_ma4 = opposing_proe_ma4_home_team - proe_ma4_away_team
+      net_opposing_proe_ma4 = opposing_proe_ma4_home_team - proe_ma4_away_team,
+      
+      # temperature as a factor variable
+      temperature = factor(
+        # categories
+        case_when(
+          temperature < 32 ~ "Freezing",
+          temperature >= 32 & temperature <= 50 ~ "Cold",
+          temperature >= 51 & temperature <= 65 ~ "Cool",
+          temperature >= 66 & temperature <= 75 ~ "Mild",
+          temperature >= 76 & temperature <= 85 ~ "Warm",
+          temperature > 85                      ~ "Hot",
+          is.na(temperature)                    ~ "Inside"
+        ),
+        
+        # factor levels
+        levels = c(
+          "Freezing",
+          "Cold",
+          "Cool",
+          "Mild",
+          "Warm",
+          "Hot",
+          "Inside"
+        )
+      ),
+      
+      # convert wind to a factor
+      wind = factor(
+        # categories
+        case_when(
+          wind < 1 ~ "Calm",
+          wind >= 1 & wind <= 3   ~ "Light Air",
+          wind >= 4 & wind <= 7   ~ "Light Breeze",
+          wind >= 8 & wind <= 12  ~ "Gentle Breeze",
+          wind >= 13 & wind <= 18 ~ "Moderate Breeze",
+          wind >= 19 & wind <= 24 ~ "Fresh Breeze",
+          wind >= 25 & wind <= 31 ~ "Strong Breeze",
+          wind >= 32 & wind <= 38 ~ "Near Gale",
+          wind >= 39 & wind <= 46 ~ "Gale",
+          is.na(wind)             ~ "Inside"
+        ),
+        
+        # factor levels
+        levels = c(
+          "Calm",
+          "Light Air",
+          "Light Breeze",
+          "Gentle Breeze",
+          "Moderate Breeze",
+          "Fresh Breeze",
+          "Strong Breeze",
+          "Near Gale",
+          "Gale",
+          "Inside"
+        )
+      ),
+      
+      # convert roof to a factor
+      roof = factor(
+        recode(
+          roof,
+          "closed" = "dome",
+          "open" = "dome"
+        )
+      )
     ) |> 
     # select columns to use in modeling
     select(
@@ -380,43 +182,327 @@ nfl_logit_ma4_data <- {
       week,
       home_team,
       away_team,
-      over,
-      div_game,
-      hour_time_difference,
-      ends_with("_ma4")
+      over:avg_drive_time_sec_away_team,
+      opposing_pass_rate_home_team:avg_drive_time_sec_allowed_away_team,
+      contains("ma4"),
+      starts_with("net_"),
+      hour_time_difference
     )
 }  
 
+
+# Original Logistic Regression -----------------------------------------------------
 
 ## set a seed
 set.seed(8029)
 
 ## training data
-train <- nfl_logit_ma4_data |>
+train <- nfl_model_data |>
   # 2021 - 2023
   filter(
     season != 2024
   ) |> 
-  # remove NAs
-  drop_na(
-    ends_with("ma4")
-  ) |> 
   # remove season and game ID
   select(
     -c(game_id:away_team)
-  )
+  ) |> 
+  # remove NAs (weeks 2:4)
+  drop_na(starts_with("net"))
 
 
 ## testing set
-test <- nfl_logit_ma4_data |> 
+test <- nfl_model_data |> 
   anti_join(train) |> 
-  # remove NAs
-  drop_na(
-    ends_with("ma4")
-  )
+  # remove NAs (weeks 2:4)
+  drop_na(starts_with("net"))
+
 
 ## initial model
-nfl_logit_ma4_model <- glm(
+full_model <- glm(
+  # formula
+  over ~ .,
+  # data 
+  data = train,
+  
+  # family
+  family = "binomial"
+)
+
+
+## summary
+summary(full_model)
+
+
+## variables
+full_model |> 
+  tidy() |> 
+  arrange(p.value)
+
+
+## exponentiate coefficient estimates to get odds
+full_model |> 
+  tidy(conf.int = TRUE, exponentiate = TRUE)
+
+
+
+## predict probabilities of test set
+### predictions
+model_pred_prob <- predict(full_model, newdata = data.frame(test), type = "response")
+
+### predict the class
+model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
+
+
+## model assessment
+### confusion matrix
+tibble(
+  actual = test$over,
+  predicted = model_pred_class
+) |> 
+  summarize(
+    accuracy = mean(actual == predicted, na.rm = TRUE)
+  )
+
+### Accuracy ~ 49.5%
+
+
+
+# Improve Full Model ------------------------------------------------------
+
+## initial model
+full_model_1 <- glm(
+  # formula
+  over ~
+    net_ppg_ma4 +
+    net_ppg_allowed_ma4 +
+    net_offensive_yards_ma4 +
+    net_defensive_yards_ma4 +
+    net_takeaways_ma4 + 
+    net_epa_ma4 +
+    net_epa_allowed_ma4 +
+    net_pass_rate_ma4 +
+    net_opposing_pass_rate_ma4 +
+    net_proe_ma4 +
+    net_opposing_proe_ma4,
+  
+  # data 
+  data = train,
+  
+  # family
+  family = "binomial"
+)
+
+
+## summary
+summary(full_model_1)
+
+
+## variables
+full_model_1 |> 
+  tidy() |> 
+  arrange(-p.value)
+
+
+# ## exponentiate coefficient estimates to get odds
+# full_model_1 |> 
+#   tidy(conf.int = TRUE, exponentiate = TRUE)
+
+
+
+## predict probabilities of test set
+### predictions
+model_pred_prob <- predict(full_model_1, newdata = data.frame(test), type = "response")
+
+### predict the class
+model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
+
+
+## model assessment
+### confusion matrix
+tibble(
+  actual = test$over,
+  predicted = model_pred_class
+) |> 
+  summarize(
+    accuracy = mean(actual == predicted, na.rm = TRUE)
+  )
+
+### Accuracy ~ 55.3%
+
+
+
+
+# Improve Full Model ------------------------------------------------------
+
+## initial model
+full_model_2 <- glm(
+  # formula
+  over ~ 
+    possessions_per_game_ma4_home_team +
+    possessions_per_game_allowed_ma4_home_team +
+    opposing_proe_ma4_home_team,
+  
+  # data 
+  data = train,
+  
+  # family
+  family = "binomial"
+)
+
+
+## summary
+summary(full_model_2)
+
+
+## variables
+full_model_2 |> 
+  tidy()
+
+
+## exponentiate coefficient estimates to get odds
+full_model_2 |> 
+  tidy(conf.int = TRUE, exponentiate = TRUE)
+
+
+
+## predict probabilities of test set
+### predictions
+model_pred_prob <- predict(full_model_2, newdata = data.frame(test), type = "response")
+
+### predict the class
+model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
+
+
+## model assessment
+### confusion matrix
+tibble(
+  actual = test$over,
+  predicted = model_pred_class
+) |> 
+  summarize(
+    accuracy = mean(actual == predicted, na.rm = TRUE)
+  )
+
+### Accuracy ~ 46.1%
+
+
+# Interaction Model -------------------------------------------------------
+
+## initial model
+interaction_model <- glm(
+  # formula
+  over ~ 
+    proe_home_team:opposing_proe_away_team + 
+    proe_away_team:opposing_proe_home_team + 
+    epa_home_team:epa_allowed_away_team +
+    avg_total_yards_home_team:avg_total_yards_allowed_away_team +
+    ppg_home_team:ppg_allowed_away_team +
+    ppg_away_team:ppg_allowed_home_team,
+  
+  # data 
+  data = train,
+  
+  # family
+  family = "binomial"
+)
+
+
+## summary
+summary(interaction_model)
+
+
+## variables
+interaction_model |> 
+  tidy()
+
+
+## exponentiate coefficient estimates to get odds
+interaction_model |> 
+  tidy(conf.int = TRUE, exponentiate = TRUE)
+
+
+
+## predict probabilities of test set
+### predictions
+model_pred_prob <- predict(interaction_model, newdata = data.frame(test), type = "response")
+
+### predict the class
+model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
+
+
+## model assessment
+### confusion matrix
+tibble(
+  actual = test$over,
+  predicted = model_pred_class
+) |> 
+  summarize(
+    accuracy = mean(actual == predicted)
+  )
+
+### Accuracy ~ 51.5%
+
+
+
+# Home Offense vs. Away Defense ------------------------------------------------------
+
+## initial model
+yards_model <- glm(
+  # formula
+  over ~ 
+    avg_total_yards_ma4_home_team:avg_total_yards_allowed_ma4_away_team +
+    avg_total_yards_ma4_away_team:avg_total_yards_allowed_ma4_home_team,
+  
+  # data 
+  data = train,
+  
+  # family
+  family = "binomial"
+)
+
+
+## summary
+summary(yards_model)
+
+
+## variables
+yards_model |> 
+  tidy()
+
+
+## exponentiate coefficient estimates to get odds
+yards_model |> 
+  tidy(conf.int = TRUE, exponentiate = TRUE)
+
+
+
+## predict probabilities of test set
+### predictions
+model_pred_prob <- predict(yards_model, newdata = data.frame(test), type = "response")
+
+### predict the class
+model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
+
+
+## model assessment
+### confusion matrix
+tibble(
+  actual = test$over,
+  predicted = model_pred_class
+) |> 
+  summarize(
+    accuracy = mean(actual == predicted, na.rm = TRUE)
+  )
+
+### Accuracy ~ 52.5%
+
+
+
+
+# Differences Model Logistic Regression ----------------------------------------------
+
+## difference model
+differences_full_model <- glm(
   # formula
   over ~ .,
   
@@ -429,23 +515,24 @@ nfl_logit_ma4_model <- glm(
 
 
 ## summary
-summary(nfl_logit_ma4_model)
+summary(differences_full_model)
 
 
 ## variables
-nfl_logit_model |> 
-  tidy()
+differences_full_model |> 
+  tidy() |> 
+  arrange(p.value)
 
 
 ## exponentiate coefficient estimates to get odds
-nfl_logit_model |> 
+differences_full_model |> 
   tidy(conf.int = TRUE, exponentiate = TRUE)
 
 
 
 ## predict probabilities of test set
 ### predictions
-model_pred_prob <- predict(nfl_logit_ma4_model, newdata = data.frame(test), type = "response")
+model_pred_prob <- predict(differences_full_model, newdata = data.frame(test), type = "response")
 
 ### predict the class
 model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
@@ -458,47 +545,23 @@ tibble(
   predicted = model_pred_class
 ) |> 
   summarize(
-    accuracy = mean(actual == predicted, na.rm = TRUE)
+    accuracy = mean(actual == predicted)
   )
 
-### Accuracy ~ 46.1%
+### Accuracy ~ 45.6%
 
 
 
+# Improve Differences Model -----------------------------------------------
 
-# Points Logistic Regression ----------------------------------------------
-
-## set a seed
-set.seed(8029)
-
-## training data
-train <- nfl_logit_ma4_data |>
-  # 2021 - 2023
-  filter(
-    season != 2024
-  ) |> 
-  # remove NAs
-  drop_na(
-    ends_with("ma4")
-  ) |> 
-  # remove season and game ID
-  select(
-    -c(game_id:away_team)
-  )
-
-
-## testing set
-test <- nfl_logit_ma4_data |> 
-  anti_join(train) |> 
-  # remove NAs
-  drop_na(
-    ends_with("ma4")
-  )
-
-## initial model
-nfl_logit_ma4_model <- glm(
+## difference model
+differences_model <- glm(
   # formula
-  over ~ net_ppg_ma4 + net_ppg_allowed_ma4,
+  over ~ 
+    net_takeaways +
+    net_epa_allowed +
+    net_offensive_possessions
+    ,
   
   # data 
   data = train,
@@ -509,23 +572,23 @@ nfl_logit_ma4_model <- glm(
 
 
 ## summary
-summary(nfl_logit_ma4_model)
+summary(differences_model)
 
 
 ## variables
-nfl_logit_model |> 
+differences_model |> 
   tidy()
 
 
 ## exponentiate coefficient estimates to get odds
-nfl_logit_model |> 
+differences_model |> 
   tidy(conf.int = TRUE, exponentiate = TRUE)
 
 
 
 ## predict probabilities of test set
 ### predictions
-model_pred_prob <- predict(nfl_logit_ma4_model, newdata = data.frame(test), type = "response")
+model_pred_prob <- predict(differences_model, newdata = data.frame(test), type = "response")
 
 ### predict the class
 model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
@@ -538,7 +601,57 @@ tibble(
   predicted = model_pred_class
 ) |> 
   summarize(
-    accuracy = mean(actual == predicted, na.rm = TRUE)
+    accuracy = mean(actual == predicted)
   )
 
 ### Accuracy ~ 46.1%
+
+
+
+# Points Logistic Regression ----------------------------------------------
+
+## improve model
+nfl_logit_model_points <- glm(
+  # formula
+  over ~ 
+    ppg_home_team:ppg_allowed_away_team +
+    ppg_away_team:ppg_allowed_home_team,
+  
+  # data 
+  data = train,
+  
+  # family
+  family = "binomial"
+)
+
+
+## summary
+summary(nfl_logit_model_points)
+
+
+## variables
+nfl_logit_model_points |> 
+  tidy()
+
+
+## predict probabilities of test set
+### predictions
+model_pred_prob <- predict(nfl_logit_model_points, newdata = data.frame(test), type = "response")
+
+### predict the class
+model_pred_class <- ifelse(model_pred_prob > 0.5, 1, 0)
+
+
+## model assessment
+### confusion matrix
+tibble(
+  actual = test$over,
+  predicted = model_pred_class
+) |> 
+  summarize(
+    accuracy = mean(actual == predicted)
+  )
+
+
+## Accuracy: 48.5%
+
