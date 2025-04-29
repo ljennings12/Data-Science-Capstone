@@ -1012,7 +1012,11 @@ home_team_over <- nfl_team_week_data |>
     title = "At Home"
   ) +
   # custom theme
-  nfl_bar_theme()
+  nfl_bar_theme() +
+  # remove x axis
+  theme(
+    axis.text.x = element_blank()
+  )
 
 
 ## over by away team
@@ -1066,17 +1070,12 @@ away_team_over <- nfl_team_week_data |>
     title = "On the Road"
   ) +
   # custom theme
-  nfl_bar_theme() +
-  # remove y axis
-  theme(
-    axis.title.y = element_blank(),
-    axis.text.y = element_blank()
-  )
+  nfl_bar_theme()
 
 
 
 ## combine the two plots
-home_team_over + away_team_over
+home_team_over / away_team_over + plot_layout(axes = "collect")
 
 
 
