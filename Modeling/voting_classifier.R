@@ -175,14 +175,6 @@ nfl_model_data <- {
           "closed" = "dome",
           "open" = "dome"
         )
-      ),
-      
-      # create a column of test fold assignments
-      test_fold = sample(
-        rep(
-          1:k, 
-          length.out = n()
-        )
       )
     ) |> 
     # select columns to use in modeling
@@ -198,12 +190,15 @@ nfl_model_data <- {
       avg_total_yards_allowed_ma4_away_team,
       avg_total_yards_ma4_home_team,
       avg_total_yards_ma4_away_team,
+      ppg_ma4_home_team,
+      ppg_ma4_away_team,
+      ppg_allowed_ma4_home_team,
+      ppg_allowed_ma4_away_team,
       starts_with("net_"),
       hour_time_difference,
       temperature,
       wind,
-      roof,
-      test_fold
+      roof
     ) |> 
     # drop NAs (remove weeks 2-4)
     drop_na(
@@ -563,3 +558,255 @@ for(i in seq_along(folds)){
 
 ## evaluate performance
 confusionMatrix(factor(all_predictions), factor(nfl_model_data$over))
+
+
+
+# Hard Voting Classifier -------------------------------------------------------
+
+## set seed
+set.seed(1534)
+
+
+## create folds
+folds <- createFolds(
+  # target
+  nfl_model_data$over,
+  
+  # number of folds
+  k = 10,
+  
+  # list
+  list = TRUE,
+  
+  # return training set
+  returnTrain = FALSE
+)
+
+
+## store results
+### final predictions
+all_predictions <- rep(NA, nrow(nfl_model_data))
+
+### fold predictions
+all_model_preds <- matrix(NA, nrow = nrow(nfl_model_data), ncol = 5)
+colnames(all_model_preds) <- c("Logit", "RF", "XGB", "GAM", "SVM")
+
+
+## loop over folds
+for(i in seq_along(folds)){
+  # training and testing sets
+  ## test
+  test_index <- folds[[i]]
+  test <- nfl_model_data[test_index, ]
+  
+  ## training
+  train_index <- setdiff(
+    seq_len(nrow(nfl_model_data)), 
+    test_index
+  )
+  train <- nfl_model_data[train_index, ]
+  
+  ## data matrices (for XGBoost)
+  ### training
+  x_train <- train |> 
+    select(
+      net_epa_ma4,
+      net_proe_ma4,
+      net_offensive_possessions_ma4,
+      net_opposing_proe_ma4,
+      net_giveaways_ma4,
+      net_takeaways_ma4
+    ) |> 
+    data.matrix()
+  
+  
+  ### testing
+  x_test <- test |> 
+    select(
+      net_epa_ma4,
+      net_proe_ma4,
+      net_offensive_possessions_ma4,
+      net_opposing_proe_ma4,
+      net_giveaways_ma4,
+      net_takeaways_ma4
+    ) |>
+    data.matrix()
+  
+  
+  # fit models on the training data
+  ## logistic model
+  logit_nfl_model <- glm(
+    # formula
+    over ~ 
+      avg_total_yards_ma4_home_team:avg_total_yards_allowed_ma4_away_team +
+      avg_total_yards_ma4_away_team:avg_total_yards_allowed_ma4_home_team,
+    
+    # data 
+    data = train,
+    
+    # family
+    family = "binomial"
+  )
+  
+  ## random forest
+  rf_nfl_model <- ranger(
+    over ~ net_epa_ma4 + net_proe_ma4 + net_offensive_possessions_ma4 + net_opposing_proe_ma4 + net_epa_allowed_ma4 + 
+      net_giveaways_ma4 + net_takeaways_ma4,
+    num.trees = 1000,
+    importance = "impurity",
+    data = train
+  )
+  
+  ## xgboost
+  xgboost_nfl_model <- xgboost(
+    data = x_train, 
+    label = as.vector(train$over),
+    objective = "binary:logistic",
+    nrounds = 60,
+    params = list(
+      max_depth = 3,
+      eta = 0.10,
+      gamma = 0.1,
+      colsample_bytree = 0.6,
+      min_child_weight = 1,
+      subsample = 0.6
+    ),
+    verbose = 0
+  )
+  
+  ## GAM
+  gam_nfl_model <- gam(
+    # formula
+    over ~
+      s(net_proe_ma4) +
+      s(net_opposing_proe_ma4) +
+      s(net_epa_ma4) +
+      s(net_epa_allowed_ma4),
+    # family
+    family = "binomial",
+    # method
+    method = "REML",
+    # data
+    data = train
+  )
+  
+  ## SVM
+  SVM_nfl_model <- svm(
+    # formula
+    over ~ 
+      net_ppg + 
+      net_ppg_allowed +
+      net_giveaways +
+      net_takeaways +
+      net_proe +
+      net_opposing_proe,
+    
+    # kernel 
+    kernel = "radial",
+    
+    # cost
+    cost = 1,
+    
+    data = train,
+    
+    probability = TRUE
+  )
+  
+  ## get predicted probabilities
+  pred1 <- ifelse(
+    predict(logit_nfl_model, test, type = "response") > 0.5,
+    1,
+    0
+  )
+  pred2 <- ifelse(
+    predict(rf_nfl_model, test)$predictions > 0.5,
+    1,
+    0
+  )
+  pred3 <- ifelse(
+    predict(xgboost_nfl_model, x_test) > 0.5,
+    1,
+    0
+  )
+  pred4 <- ifelse(
+    predict(gam_nfl_model, test, type = "response") > 0.5,
+    1,
+    0
+  )
+  pred5 <- ifelse(
+    predict(SVM_nfl_model, test) > 0.5,
+    1,
+    0
+  )
+  
+  
+  ## store predictions for current fold
+  all_model_preds[test_index, ] <- cbind(pred1, pred2, pred3, pred4, pred5)
+  
+  
+  ## combine into a matrix
+  prediction_matrix <- cbind(
+    pred1, pred2, pred3, pred4, pred5
+  )
+  
+  
+  ## hard voting
+  vote_prediction <- apply(prediction_matrix, 1, function(x) {
+    # Find the most common class label (majority vote)
+    ux <- unique(x)
+    ux[which.max(tabulate(match(x, ux)))]
+  })
+  
+  
+  ## final prediction
+  all_predictions[test_index] <- vote_prediction
+}
+
+
+## evaluate performance
+confusionMatrix(factor(all_predictions), factor(nfl_model_data$over))
+
+
+## count votes for each observation
+rowSums(all_model_preds == 1)
+
+
+## plot
+### tibble
+tibble(
+  votes_for_over = factor(
+    rowSums(all_model_preds == 1)
+  )
+) |> 
+  # count each occurrence
+  count(votes_for_over) |> 
+  ggplot(
+    aes(
+      # x axis
+      votes_for_over,
+      # y axis
+      n
+    )
+  ) +
+  # columns
+  geom_col(
+    fill = "#013369"
+  ) +
+  # labels
+  labs(
+    x = "Number of Models Predicting Over",
+    y = "Number of Observations",
+    title = "Distribution of Model Votes for Over"
+  ) +
+  # custom theme
+  nfl_plot_theme()
+
+
+## accuracy function
+accuracy <- function(true, pred) mean(true == pred)
+
+## save accuracies
+
+
+
+
