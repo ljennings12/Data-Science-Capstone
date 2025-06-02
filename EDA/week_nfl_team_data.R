@@ -97,7 +97,7 @@ nfl_team_week_data |>
     title = "How Often Did the Over Hit in Each Season"
   ) +
   # custom theme
-  nfl_scatterplot_theme()
+  nfl_plot_theme()
 
 
 
@@ -155,7 +155,7 @@ nfl_team_week_data |>
     title = "How Often Did the Over Hit in Each Week"
   ) +
   # custom theme
-  nfl_scatterplot_theme()
+  nfl_plot_theme()
 
 
 

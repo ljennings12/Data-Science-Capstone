@@ -771,7 +771,7 @@ tibble(
   # line at 53%
   geom_hline(
     # line at 53%
-    yintercept = 0.53,
+    yintercept = 0.524,
     # color
     color = "#D50A0A",
     # dashed line
@@ -992,6 +992,74 @@ tibble(
 
 
 
+# XGBoost -----------------------------------------------------------------
+
+x_train <- nfl_model_data |> 
+  select(
+    net_epa_ma4,
+    net_proe_ma4,
+    net_offensive_possessions_ma4,
+    net_opposing_proe_ma4,
+    net_giveaways_ma4,
+    net_takeaways_ma4
+  ) |> 
+  data.matrix()
+
+## xgboost
+xgboost_nfl_model <- xgboost(
+  data = x_train, 
+  label = as.vector(nfl_model_data$over),
+  objective = "binary:logistic",
+  nrounds = 60,
+  params = list(
+    max_depth = 3,
+    eta = 0.10,
+    gamma = 0.1,
+    colsample_bytree = 0.6,
+    min_child_weight = 1,
+    subsample = 0.6
+  ),
+  verbose = 0
+)
+
+tibble(
+  variable = c(
+    "Matchup Strength Takeaways MA",
+    "Matchup Strength Giveaways MA",
+    "Matchup Strength Opposing PROE MA",
+    "Matchup Strength PROE MA",
+    "Matchup Strength Offensive Possessions",
+    "Matchup Strength EPA MA"
+  ),
+  var_imp = xgb.importance(model = xgboost_nfl_model)$Gain
+) |> 
+  # plot
+  ggplot(
+    aes(
+      # x axis
+      x = var_imp,
+      # y axis
+      y = fct_reorder(variable, var_imp)
+    )
+  ) +
+  # geom col
+  geom_col(
+    # color
+    color = "black",
+    # fill
+    fill = "#013369"
+  ) +
+  # labels
+  labs(
+    x = "Variable Importance",
+    y = "Predictor",
+    title = "XGBoost Variable Importance",
+    caption = "Note: MA = Moving Average (4 weeks)"
+  ) +
+  # custom theme
+  nfl_plot_theme()
+
+
 # Logistic Regression Plot ------------------------------------------------
 
 ## logistic model
@@ -1065,6 +1133,83 @@ logit_nfl_model |>
   # footnote
   tab_footnote(
     footnote = md("*Note: MA = Moving Average (4 weeks)*")
+  ) |> 
+  # theme
+  gt_theme_espn()
+
+
+
+
+# Demo Table --------------------------------------------------------------
+
+nfl_model_data |>
+  # mutate
+  mutate(
+    matchup_ppg = ppg_home_team + ppg_allowed_away_team,
+    matchup_offensive_yards_ma4 = avg_total_yards_ma4_home_team + avg_total_yards_allowed_ma4_away_team
+  ) |> 
+  # select columns
+  select(
+    season, 
+    home_team,
+    away_team,
+    week,
+    over,
+    net_ppg,
+    matchup_ppg,
+    net_offensive_yards_ma4,
+    matchup_offensive_yards_ma4
+  ) |>
+  # gt table
+  gt() |> 
+  # align columns
+  cols_align(
+    align = "center"
+  ) |> 
+  # label columns
+  cols_label(
+    season = "Season",
+    home_team = "Home Team",
+    away_team = "Away Team",
+    week = "Week",
+    over = "Over",
+    net_ppg = "Matchup Strength Points Per Game",
+    matchup_ppg = "Matchup Strength Points Per Game",
+    net_offensive_yards_ma4 = "MA of Matchup Strength Offensive Yards",
+    matchup_offensive_yards_ma4 = "MA of Matchup Strength Offensive Yards"
+  ) |> 
+  # format numerical columns
+  fmt_number(
+    columns = c(
+      net_ppg,
+      matchup_ppg,
+      net_offensive_yards_ma4
+    ),
+    decimals = 2
+  ) |> 
+  # add color
+  data_color(
+    # columns
+    columns = c(
+      net_ppg,
+      matchup_ppg,
+      net_offensive_yards_ma4,
+      matchup_offensive_yards_ma4
+    ),
+    # scale
+    fn = scales::col_numeric(
+      palette = c("dodgerblue4", "white", "goldenrod"), 
+      domain = NULL
+    )
+  ) |> 
+  # title and subtitle
+  tab_header(
+    title = md("**NFL Game-by-Game Stats**"),
+    subtitle = md("*Data: nflreadr*")
+  ) |> 
+  # footnote
+  tab_footnote(
+    footnote = md("*Second and Fourth Columns are Additive*")
   ) |> 
   # theme
   gt_theme_espn()
