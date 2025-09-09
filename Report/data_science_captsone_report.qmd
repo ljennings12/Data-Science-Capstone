@@ -1,0 +1,2032 @@
+---
+title: "Read Between the Lines: Key Predictors of NFL Over/Under Outcomes"
+author: "Liam Jennings"
+date: "2025-05-07"
+description: "STAT 7100: Master’s Data Science Capstone"
+toc: true
+number-sections: true
+code-fold: true
+format: 
+  html: 
+    theme: [theme.scss]
+---
+
+```{r}
+#| output: false
+#| echo: false
+
+# Libraries and Functions
+library(nflreadr)
+library(tidyverse)
+library(nflplotR)
+library(patchwork)
+library(gt)
+library(gtExtras)
+library(glmnet)
+library(broom)
+library(ranger)
+library(xgboost)
+library(mgcv)
+library(e1071)
+library(caret)
+
+
+## bar plot custom theme
+nfl_bar_theme <- function(){
+  # theme
+  theme(
+    # adjust plot title
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    # adjust plot subtitle
+    plot.subtitle = element_text(size = 16, face = "bold", hjust = 0.5),
+    # adjust plot caption
+    plot.caption = element_text(size = 10),
+    # it's obvious what the x-axis is so we remove the title
+    axis.title.x = element_blank(),
+    # adjust y axis title
+    axis.title.y = element_text(size = 14, face = "bold", hjust = 0.5),
+    # adjust y axis text
+    axis.text.y = element_text(size = 12, hjust = 0.5),
+    # adjust legend position
+    legend.position = "bottom",
+    # adjust legend title text
+    legend.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    # adjust legend text
+    legend.text = element_text(size = 12, hjust = 0.5),
+    # replacement of team abbreviations with logos
+    axis.text.x = nflplotR::element_nfl_logo(size = 1),
+    # adjust the strip text size
+    strip.text = element_text(face = "bold", size = rel(1.5), color = "white"),
+    # adjust the strip text background color
+    strip.background = element_rect(fill = "#013369", color = "black", linewidth = 1),
+  )
+}
+
+
+
+## scatterplot custom theme
+nfl_plot_theme <- function(){
+  # theme
+  theme(
+    # adjust plot title
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5),
+    # adjust plot subtitle
+    plot.subtitle = element_text(size = 16, face = "bold", hjust = 0.5),
+    # adjust plot caption
+    plot.caption = element_text(size = 10),
+    # adjust x axis title
+    axis.title.x = element_text(size = 14, face = "bold", hjust = 0.5),
+    # adjust y axis title
+    axis.title.y = element_text(size = 14, face = "bold", hjust = 0.5),
+    # adjust x axis text
+    axis.text.x = element_text(size = 12, hjust = 0.5),
+    # adjust y axis text
+    axis.text.y = element_text(size = 12, hjust = 0.5),
+    # adjust legend position
+    legend.position = "bottom",
+    # adjust legend title text
+    legend.title = element_text(size = 14, face = "bold", hjust = 0.5),
+    # adjust legend text
+    legend.text = element_text(size = 12, hjust = 0.5),
+    # adjust the strip text size
+    strip.text = element_text(face = "bold", size = rel(1.5), color = "white"),
+    # adjust the strip text background color
+    strip.background = element_rect(fill = "#013369", color = "black", linewidth = 1),
+  )
+}
+
+
+## set theme
+theme_set(theme_bw())
+
+
+## accuracy function
+accuracy <- function(true, pred) mean(true == pred)
+```
+
+
+
+```{r}
+#| output: false
+#| echo: false
+
+# Game Lines --------------------------------------------------------------
+
+## read in data
+### NFL 2024 play-by-play
+pbp_24 <- nflreadr::load_pbp(seasons = 2024)
+
+### NFL 2023 play-by-play
+pbp_23 <- nflreadr::load_pbp(seasons = 2023)
+
+### NFL 2022 play-by-play
+pbp_22 <- nflreadr::load_pbp(seasons = 2022)
+
+### NFL 2021 play-by-play
+pbp_21 <- nflreadr::load_pbp(seasons = 2021)
+
+### combine play-by-play into one dataset
+play_by_play <- rbind(pbp_21, pbp_22, pbp_23, pbp_24)
+
+
+## get total lines for each game
+game_total_lines <- {
+  play_by_play |> 
+    # filter
+    filter(
+      # regular season
+      season_type == "REG",
+      
+      # remove international games
+      location == "Home"
+    ) |> 
+    # group by game, season, teams, and weeks
+    group_by(
+      game_id, 
+      season,
+      home_team, 
+      away_team, 
+      week
+    ) |> 
+    # home and away team scores and total line
+    summarize(
+      total_home_score = last(total_home_score),
+      
+      total_away_score = last(total_away_score),
+      
+      total_line = last(total_line)
+    ) |> 
+    # calculate total final score and whether the over hits or not
+    mutate(
+      total_score = total_home_score + total_away_score,
+      
+      over = ifelse(total_score > total_line, 1, 0)
+    ) |> 
+    # ungroup
+    ungroup()
+}
+
+
+# Offensive Time of Possession ------------------------------------------------------
+
+
+## calculate average time of possession per game
+t_o_p <- {
+  play_by_play |> 
+    filter(
+      # regular season
+      season_type == "REG",
+      
+      # remove plays that were blown dead
+      play_type != "no_play",
+      
+      # plays that are not two point attempts
+      two_point_attempt == 0,
+      
+      # remove extra points
+      special == 0
+    ) |>
+    # mutate
+    mutate(
+      # create artificial number of possessions variable
+      possession = paste(drive, "-", fixed_drive_result),
+      
+      # call posteam by team (for plotting purposes in nflplotr)
+      team = posteam,
+      
+      # time of possession in seconds
+      time_of_possession_sec = as.numeric(
+        ms(
+          drive_time_of_possession
+        )
+      )
+    ) |> 
+    # group by game ID, season, team, week, and possession
+    group_by(
+      game_id,
+      season,
+      team, 
+      week,
+      possession
+    ) |> 
+    # summarize
+    summarize(
+      # average time of possession in seconds
+      avg_drive_time_of_possession_sec = mean(time_of_possession_sec)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team and week
+    group_by(
+      game_id,
+      season,
+      team, 
+      week
+    ) |> 
+    # summarize
+    summarize(
+      # average time of possession for each game and week in seconds
+      avg_time_of_possession_sec = sum(avg_drive_time_of_possession_sec),
+      
+      # average drive time of possession for each game and week in seconds
+      avg_drive_time = mean(avg_drive_time_of_possession_sec)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team
+    group_by(team, season) |> 
+    mutate(
+      # sequence along to get cumulative average
+      avg_time_of_possession_sec = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
+      
+      # convert average time of possession back to minutes and seconds for visual
+      avg_time_of_possession = seconds_to_period(avg_time_of_possession_sec),
+      
+      # sequence along to get cumulative average
+      avg_drive_time_sec = cumsum(avg_drive_time) / seq_along(avg_drive_time),
+      
+      # convert average time of possession back to minutes and seconds for visual
+      avg_drive_time = seconds_to_period(avg_drive_time_sec)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # select
+    select(
+      game_id,
+      team,
+      week,
+      avg_drive_time_sec, 
+      avg_drive_time,
+      avg_time_of_possession_sec,
+      avg_time_of_possession
+    )
+}
+
+
+
+# Offensive Metrics -------------------------------------------------------
+
+## get offensive statistics
+offensive_metrics <- {
+  play_by_play |> 
+    filter(
+      # regular season
+      season_type == "REG",
+      
+      # real plays
+      play == 1 |
+        # QB kneels
+        qb_kneel == 1,
+      
+      # remove plays that were blown dead
+      play_type != "no_play",
+      
+      # plays that are not two point attempts
+      two_point_attempt == 0
+    ) |>
+    mutate(
+      # create artificial number of possessions variable
+      possession = paste(drive, "-", fixed_drive_result),
+      
+      # call posteam by team (for plotting purposes in nflplotr)
+      team = posteam
+    ) |> 
+    # group by week
+    group_by(game_id, season, team, week) |> 
+    # calculate offensive statistics
+    summarize(
+      # total yards
+      total_yards = sum(yards_gained),
+      
+      # total passing yards - does not include loss of yards from sacks
+      total_pass_yards = sum(passing_yards, na.rm = TRUE),
+      
+      # total rushing yards
+      total_rush_yards = sum(rushing_yards, na.rm = TRUE),
+      
+      # points per game
+      points = last(posteam_score),
+      
+      # pass rate
+      pass_rate = mean(pass),
+      
+      # rush rate
+      rush_rate = sum(rush + qb_kneel) / n(),
+      
+      # pass rate over expected (PROE)
+      proe = mean(pass) - mean(xpass, na.rm = TRUE),
+      
+      # expected points added (EPA)
+      epa = mean(epa, na.rm = TRUE),
+      
+      # giveaways
+      giveaways = sum(interception) + sum(fumble_lost),
+      
+      # number of possessions
+      possession = n_distinct(possession),
+      
+      # divisional game
+      div_game = last(div_game)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team
+    group_by(team, season) |> 
+    # average statistics going into the match up
+    mutate(
+      # average total yards
+      avg_total_yards = cumsum(total_yards) / seq_along(total_yards),
+      
+      # average total passing yards
+      avg_total_pass_yards = cumsum(total_pass_yards) / seq_along(total_pass_yards),
+      
+      # average total rushing yards
+      avg_total_rush_yards = cumsum(total_rush_yards) / seq_along(total_rush_yards),
+      
+      # points per game
+      ppg = cumsum(points) / row_number(),
+      
+      # series per game (figure out how to calculate this and time of possession)
+      possessions_per_game = cumsum(possession) / seq_along(possession),
+      
+      # pass rate
+      pass_rate = cumsum(pass_rate) / seq_along(pass_rate),
+      
+      # rush rate
+      rush_rate = cumsum(rush_rate) / seq_along(rush_rate),
+      
+      # pass rate over expected (PROE)
+      proe = cumsum(proe) / seq_along(proe),
+      
+      # expected points added (EPA)
+      epa = cumsum(epa) / seq_along(epa),
+      
+      # giveaways per game
+      giveaways_per_game = cumsum(giveaways) / seq_along(giveaways),
+      
+      # points per possession
+      points_per_poss = ppg / possessions_per_game
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # join time of possession to dataset
+    inner_join(
+      t_o_p
+    )
+}
+
+
+
+# Offensive Lagged Metrics ------------------------------------------------------------
+
+offensive_metrics_lagged <- {
+  offensive_metrics |> 
+    # order dataset
+    arrange(team, season, week) |> 
+    # group by team and season
+    group_by(team, season) |> 
+    mutate(
+      # apply lag function across certain columns
+      across(
+        # columns
+        c(pass_rate:epa, avg_total_yards:avg_time_of_possession),
+        # lag function
+        lag
+      ),
+      
+      # calculate moving average of the last 4 weeks
+      across(
+        # columns
+        c(pass_rate:epa, avg_total_yards:avg_time_of_possession),
+        # moving average function
+        ~ zoo::rollapplyr(
+          # data
+          .x,
+          
+          # width
+          width = 4,
+          
+          # function
+          FUN = mean,
+          
+          # fill
+          fill = NA,
+          
+          # align
+          align = "right"
+        ),
+        
+        # column names
+        .names = "{.col}_ma4"
+      )
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # remove week 1
+    drop_na(pass_rate)
+}
+
+
+
+# Defensive Possession --------------------------------------------------------------
+
+## calculate average time of possession per game
+t_o_p_defense <- {
+  play_by_play |> 
+    filter(
+      # regular season
+      season_type == "REG",
+      
+      # remove plays that were blown dead
+      play_type != "no_play",
+      
+      # plays that are not two point attempts
+      two_point_attempt == 0,
+      
+      # remove extra points
+      special == 0
+    ) |>
+    # mutate
+    mutate(
+      # create artificial number of possessions variable
+      possession = paste(drive, "-", fixed_drive_result),
+      
+      # call posteam by team (for plotting purposes in nflplotr)
+      team = defteam,
+      
+      # time of possession in seconds
+      time_of_possession_sec = as.numeric(
+        ms(
+          drive_time_of_possession
+        )
+      )
+    ) |> 
+    # group by team, week, and possession
+    group_by(
+      game_id,
+      season,
+      team, 
+      week,
+      possession
+    ) |> 
+    # summarize
+    summarize(
+      # average time of possession in seconds
+      avg_drive_time_of_possession_sec = mean(time_of_possession_sec)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team and week
+    group_by(
+      game_id,
+      season,
+      team, 
+      week
+    ) |> 
+    # summarize
+    summarize(
+      # average time of possession for each game and week in seconds
+      avg_time_of_possession_sec = sum(avg_drive_time_of_possession_sec),
+      
+      # average drive time of possession for each game and week in seconds
+      avg_drive_time = mean(avg_drive_time_of_possession_sec)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team
+    group_by(team, season) |> 
+    mutate(
+      # sequence along to get cumulative average
+      avg_time_of_possession_sec_allowed = cumsum(avg_time_of_possession_sec) / seq_along(avg_time_of_possession_sec),
+      
+      # convert average time of possession back to minutes and seconds for visual
+      avg_time_of_possession_allowed = seconds_to_period(avg_time_of_possession_sec_allowed),
+      
+      # sequence along to get cumulative average
+      avg_drive_time_sec_allowed = cumsum(avg_drive_time) / seq_along(avg_drive_time),
+      
+      # convert average time of possession back to minutes and seconds for visual
+      avg_drive_time_allowed = seconds_to_period(avg_drive_time_sec_allowed)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # select
+    select(
+      game_id,
+      team,
+      week,
+      avg_drive_time_sec_allowed, 
+      avg_drive_time_allowed,
+      avg_time_of_possession_sec_allowed,
+      avg_time_of_possession_allowed
+    )
+}
+
+
+
+# Defensive Metrics -------------------------------------------------------
+
+## get offensive statistics
+defensive_metrics <- {
+  play_by_play |> 
+    filter(
+      # regular season
+      season_type == "REG",
+      
+      # real plays
+      play == 1 |
+      # QB kneels
+      qb_kneel == 1,
+      
+      # remove plays that were blown dead
+      play_type != "no_play",
+      
+      # plays that are not two point attempts
+      two_point_attempt == 0
+    ) |>
+    mutate(
+      # create artificial number of possessions variable
+      possession = paste(drive, "-", fixed_drive_result),
+      
+      # call posteam by team (for plotting purposes in nflplotr)
+      team = defteam
+    ) |> 
+    # group by week
+    group_by(game_id, season, team, week) |> 
+    # calculate offensive statistics
+    summarize(
+      # total yards allowed
+      total_yards_allowed = sum(yards_gained),
+      
+      # total passing yards allowed - does not include loss of yards from sacks
+      total_pass_yards_allowed = sum(passing_yards, na.rm = TRUE),
+      
+      # total rushing yards allowed
+      total_rush_yards_allowed = sum(rushing_yards, na.rm = TRUE),
+      
+      # points per game allowed
+      points_allowed = last(posteam_score),
+      
+      # pass rate
+      opposing_pass_rate = mean(pass),
+      
+      # rush rate
+      opposing_rush_rate = sum(rush + qb_kneel) / n(),
+      
+      # pass rate over expected (PROE)
+      opposing_proe = mean(pass) - mean(xpass, na.rm = TRUE),
+      
+      # expected points added (EPA)
+      epa_allowed = mean(epa, na.rm = TRUE),
+      
+      # giveaways
+      takeaways = sum(interception) + sum(fumble_lost),
+      
+      # number of possessions
+      possession_allowed = n_distinct(possession)
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # group by team and season
+    group_by(team, season) |> 
+    # average statistics going into the match up
+    mutate(
+      # average total yards
+      avg_total_yards_allowed = cumsum(total_yards_allowed) / seq_along(total_yards_allowed),
+      
+      # average total passing yards
+      avg_total_pass_yards_allowed = cumsum(total_pass_yards_allowed) / seq_along(total_pass_yards_allowed),
+      
+      # average total rushing yards
+      avg_total_rush_yards_allowed = cumsum(total_rush_yards_allowed) / seq_along(total_rush_yards_allowed),
+      
+      # points per game
+      ppg_allowed = cumsum(points_allowed) / seq_along(points_allowed),
+      
+      # series per game (figure out how to calculate this and time of possession)
+      possessions_per_game_allowed = cumsum(possession_allowed) / seq_along(possession_allowed),
+      
+      # pass rate
+      opposing_pass_rate = cumsum(opposing_pass_rate) / seq_along(opposing_pass_rate),
+      
+      # rush rate
+      opposing_rush_rate = cumsum(opposing_rush_rate) / seq_along(opposing_rush_rate),
+      
+      # pass rate over expected (PROE)
+      opposing_proe = cumsum(opposing_proe) / seq_along(opposing_proe),
+      
+      # expected points added (EPA)
+      epa_allowed = cumsum(epa_allowed) / seq_along(epa_allowed),
+      
+      # giveaways per game
+      takeaways_per_game = cumsum(takeaways) / seq_along(takeaways),
+      
+      # points per possession
+      points_allowed_per_poss = ppg_allowed / possessions_per_game_allowed
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # join time of possession to dataset
+    inner_join(
+      t_o_p_defense
+    )
+}
+
+
+
+# Lagged Metrics ------------------------------------------------------------
+
+defensive_metrics_lagged <- {
+  defensive_metrics |> 
+    # order dataset
+    arrange(team, season, week) |> 
+    # group by team and season
+    group_by(team, season) |> 
+    mutate(
+      # apply lag function across certain columns
+      across(
+        # columns
+        c(opposing_pass_rate:epa_allowed, avg_total_yards_allowed:avg_time_of_possession_allowed),
+        # lag function
+        lag
+      ),
+      
+      # calculate moving average of the last 4 weeks
+      across(
+        # columns
+        c(opposing_pass_rate:epa_allowed, avg_total_yards_allowed:avg_time_of_possession_allowed),
+        # moving average function
+        ~ zoo::rollapplyr(
+          # data
+          .x,
+          
+          # width
+          width = 4,
+          
+          # function
+          FUN = mean,
+          
+          # fill
+          fill = NA,
+          
+          # align
+          align = "right"
+        ),
+        
+        # column names
+        .names = "{.col}_ma4"
+      )
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # remove week 1
+    drop_na(opposing_pass_rate)
+}
+
+
+
+# Independent Factors -------------------------------------------------------
+
+independent_metrics <- {
+  play_by_play |> 
+    # filter
+    filter(
+      # regular season
+      season_type == "REG",
+      
+      # remove international games
+      location == "Home"
+    ) |> 
+    # group by game
+    group_by(game_id, home_team, away_team, week) |> 
+    # summarize
+    summarize(
+      # inside or outside
+      roof = first(roof),
+      
+      # turf type
+      surface = first(surface),
+      
+      # temperature (in fahrenheit)
+      temperature = first(temp),
+      
+      # wind (in mph)
+      wind = first(wind),
+      
+      # weather description
+      weather = last(weather),
+      
+      # kickoff time (game start)
+      time_of_kickoff = first(time_of_day, na_rm = TRUE)
+    ) |> 
+    # mutate
+    mutate(
+      # parse the ISO 8601 string properly to strip milliseconds and handle the time zone
+      time_of_kickoff = ymd_hms(sub("\\.\\d+Z$", "", time_of_kickoff), tz = "UTC"),
+      
+      # add time zone to the dataset
+      home_timezone = case_when(
+        # Eastern Time Zone
+        home_team %in% c(
+          "ATL", "BAL", "BUF", "CAR", "CIN", "CLE", 
+          "DET", "IND", "JAX", "MIA", "NE", "NYG",
+          "NYJ", "PHI", "PIT", "TB", "WAS"
+        ) ~ "US/Eastern",
+        
+        # Central Time Zone
+        home_team %in% c(
+          "CHI", "DAL", "GB", "HOU", "KC", "MIN", "NO", "TEN"
+        ) ~ "US/Central",
+        
+        # Mountain Time Zone
+        home_team %in% c(
+          "DEN"
+        ) ~ "US/Mountain",
+        
+        # Arizona
+        home_team %in% c(
+          "ARI"
+        ) ~ "US/Arizona",
+        
+        # Pacific
+        home_team %in% c(
+          "LA", "LAC", "LV", "SEA", "SF"
+        ) ~ "US/Pacific"
+      ),
+      
+      # add time zone to the dataset
+      away_timezone = case_when(
+        # Eastern Time Zone
+        away_team %in% c(
+          "ATL", "BAL", "BUF", "CAR", "CIN", "CLE", 
+          "DET", "IND", "JAX", "MIA", "NE", "NYG",
+          "NYJ", "PHI", "PIT", "TB", "WAS"
+        ) ~ "US/Eastern",
+        
+        # Central Time Zone
+        away_team %in% c(
+          "CHI", "DAL", "GB", "HOU", "KC", "MIN", "NO", "TEN"
+        ) ~ "US/Central",
+        
+        # Mountain Time Zone
+        away_team %in% c(
+          "DEN"
+        ) ~ "US/Mountain",
+        
+        # Arizona
+        away_team %in% c(
+          "ARI"
+        ) ~ "US/Arizona",
+        
+        # Pacific
+        away_team %in% c(
+          "LA", "LAC", "LV", "SEA", "SF"
+        ) ~ "US/Pacific"
+      ),
+      
+      # home team kickoff time with specified time zone
+      home_team_kickoff_time = map2(
+        time_of_kickoff,
+        home_timezone,
+        ~with_tz(.x, tzone = .y)
+      ),
+      
+      # unwrap list and convert into a datetime object
+      home_team_kickoff_time = as_datetime(
+        unlist(
+          home_team_kickoff_time
+        )
+      ),
+      
+      # visual home time zone
+      home_team_kickoff_time_visual = map2_chr(
+        time_of_kickoff, 
+        home_timezone, 
+        ~format(
+          with_tz(.x, tzone = .y), 
+          "%Y-%m-%d %H:%M:%S %Z"
+        )
+      ),
+      
+      # home time hour:minute
+      home_team_kickoff_time_hm = format(
+        ymd_hms(home_team_kickoff_time_visual),
+        "%I:%M:%S %p"
+      ),
+      
+      # away team kickoff time with specified time zone
+      away_team_kickoff_time = map2(
+        time_of_kickoff,
+        away_timezone,
+        ~with_tz(.x, tzone = .y)
+      ),
+      
+      # unwrap list column
+      away_team_kickoff_time = as_datetime(unlist(home_team_kickoff_time)),
+      
+      # visual home time zone
+      away_team_kickoff_time_visual = map2_chr(
+        time_of_kickoff, 
+        away_timezone, 
+        ~format(
+          with_tz(.x, tzone = .y), 
+          "%Y-%m-%d %H:%M:%S %Z"
+        )
+      ),
+      
+      # home time hour:minute
+      away_team_kickoff_time_hm = format(
+        ymd_hms(away_team_kickoff_time_visual), 
+        "%I:%M:%S %p"
+      ),
+      
+      # calculate time difference between home and away team
+      hour_time_difference = abs(
+        as.numeric(
+          difftime(
+            ymd_hms(away_team_kickoff_time, tz = away_timezone), 
+            ymd_hms(home_team_kickoff_time, tz = home_timezone), 
+            units = "hours"
+          )
+        )
+      )
+    ) |> 
+    # ungroup
+    ungroup() |> 
+    # select variables you want to consider
+    select(
+      -c(
+        week,
+        weather:away_team_kickoff_time_hm
+      )
+    )
+}
+
+
+
+# Reshape Offensive Metrics -----------------------------------------------
+
+offensive_metrics_reshape <- {
+  offensive_metrics_lagged |> 
+    # group by game_id
+    group_by(game_id) |> 
+    mutate(
+      # create home team based on game_id variable
+      home_team = sub(".*_", "", game_id),
+      
+      # create a team role variable to use in pivot wider
+      team_role = if_else(
+        # condition
+        team == home_team,
+        
+        # if home team
+        "home_team",
+        
+        # if not home team
+        "away_team"
+      )
+    ) |> 
+    # reshape the data
+    pivot_wider(
+      id_cols = game_id,
+      
+      names_from = team_role,
+      
+      values_from = -c(game_id, team_role)
+    ) |> 
+    # select columns
+    select(
+      game_id,
+      home_team = team_home_team,
+      away_team = team_away_team,
+      week = week_home_team,
+      div_game = div_game_away_team,
+      pass_rate_home_team:epa_away_team,
+      avg_total_yards_home_team:avg_time_of_possession_ma4_away_team
+    )
+}
+
+
+# Reshape Defensive Metrics -----------------------------------------------
+
+defensive_metrics_reshape <- {
+  defensive_metrics_lagged |> 
+    # group by game_id
+    group_by(game_id) |> 
+    mutate(
+      # create home team based on game_id variable
+      home_team = sub(".*_", "", game_id),
+      
+      # create a team role variable to use in pivot wider
+      team_role = if_else(
+        # condition
+        team == home_team,
+        
+        # if home team
+        "home_team",
+        
+        # if not home team
+        "away_team"
+      )
+    ) |> 
+    # reshape the data
+    pivot_wider(
+      id_cols = game_id,
+      
+      names_from = team_role,
+      
+      values_from = -c(game_id, team_role)
+    ) |> 
+    # select columns
+    select(
+      game_id,
+      home_team = team_home_team,
+      away_team = team_away_team,
+      week = week_home_team,
+      opposing_pass_rate_home_team:epa_allowed_away_team,
+      avg_total_yards_allowed_home_team:avg_time_of_possession_allowed_ma4_away_team
+    )
+}
+
+
+
+# Combine All Datasets Together -------------------------------------------
+
+nfl_team_week_data <- {
+  game_total_lines |> 
+    # remove week 1 games
+    filter(week != 1) |> 
+    
+    # join offensive metrics
+    inner_join(offensive_metrics_reshape) |> 
+    
+    # join defensive metrics
+    inner_join(defensive_metrics_reshape) |> 
+    
+    # join independent factors
+    inner_join(independent_metrics)
+}
+
+
+
+## create difference variables (model data)
+nfl_model_data <- {
+  nfl_team_week_data |> 
+    # mutate
+    mutate(
+      # have team as a factor
+      home_team = factor(home_team),
+      away_team = factor(away_team),
+      
+      # have divisional game as a factor
+      div_game = factor(div_game),
+      
+      # have hour time difference as a factor
+      hour_time_difference = factor(hour_time_difference),
+      
+      # difference in points scored
+      net_ppg = ppg_home_team - ppg_allowed_away_team,
+      
+      # difference in points allowed
+      net_ppg_allowed = ppg_allowed_home_team - ppg_away_team,
+      
+      # difference in offensive yards
+      net_offensive_yards = avg_total_yards_home_team - avg_total_yards_allowed_away_team,
+      
+      # difference in defensive yards
+      net_defensive_yards = avg_total_yards_allowed_home_team - avg_total_yards_away_team,
+      
+      # difference in offensive possessions
+      net_offensive_possessions = possessions_per_game_home_team - possessions_per_game_allowed_away_team,
+      
+      # difference in defensive possessions
+      net_defensive_possessions = possessions_per_game_allowed_home_team - possessions_per_game_away_team,
+      
+      # difference in giveaways
+      net_giveaways = giveaways_per_game_home_team - takeaways_per_game_away_team,
+      
+      # difference in takeaways
+      net_takeaways = giveaways_per_game_away_team - takeaways_per_game_home_team,
+      
+      # difference in offensive EPA
+      net_epa = epa_home_team - epa_allowed_away_team,
+      
+      # difference in defensive EPA
+      net_epa_allowed = epa_allowed_home_team - epa_away_team,
+      
+      # difference in offensive pass rate
+      net_pass_rate = pass_rate_home_team - opposing_pass_rate_away_team,
+      
+      # difference in opposing pass rate
+      net_opposing_pass_rate = pass_rate_away_team - opposing_pass_rate_home_team,
+      
+      # difference in pass rate over expected
+      net_proe = proe_home_team - opposing_proe_away_team,
+      
+      # difference in opposing pass rate over expected
+      net_opposing_proe = opposing_proe_home_team - proe_away_team,
+      
+      # difference in points scored
+      net_ppg_ma4 = ppg_ma4_home_team - ppg_allowed_ma4_away_team,
+      
+      # difference in points allowed
+      net_ppg_allowed_ma4 = ppg_allowed_ma4_home_team - ppg_ma4_away_team,
+      
+      # difference in offensive yards
+      net_offensive_yards_ma4 = avg_total_yards_ma4_home_team - avg_total_yards_allowed_ma4_away_team,
+      
+      # difference in defensive yards
+      net_defensive_yards_ma4 = avg_total_yards_allowed_ma4_home_team - avg_total_yards_ma4_away_team,
+      
+      # difference in offensive possessions
+      net_offensive_possessions_ma4 = possessions_per_game_ma4_home_team - possessions_per_game_allowed_ma4_away_team,
+      
+      # difference in defensive possessions
+      net_defensive_possessions_ma4 = possessions_per_game_allowed_ma4_home_team - possessions_per_game_ma4_away_team,
+      
+      # difference in giveaways
+      net_giveaways_ma4 = giveaways_per_game_ma4_home_team - takeaways_per_game_ma4_away_team,
+      
+      # difference in takeaways
+      net_takeaways_ma4 = takeaways_per_game_ma4_home_team - giveaways_per_game_ma4_away_team,
+      
+      # difference in offensive EPA
+      net_epa_ma4 = epa_ma4_home_team - epa_allowed_ma4_away_team,
+      
+      # difference in defensive EPA
+      net_epa_allowed_ma4 = epa_allowed_ma4_home_team - epa_ma4_away_team,
+      
+      # difference in offensive pass rate
+      net_pass_rate_ma4 = pass_rate_ma4_home_team - opposing_pass_rate_ma4_away_team,
+      
+      # difference in opposing pass rate
+      net_opposing_pass_rate_ma4 = opposing_pass_rate_ma4_home_team - pass_rate_ma4_away_team,
+      
+      # difference in pass rate over expected
+      net_proe_ma4 = proe_ma4_home_team - opposing_proe_ma4_away_team,
+      
+      # difference in opposing pass rate over expected
+      net_opposing_proe_ma4 = opposing_proe_ma4_home_team - proe_ma4_away_team,
+      
+      # temperature as a factor variable
+      temperature = factor(
+        # categories
+        case_when(
+          temperature < 32 ~ "Freezing",
+          temperature >= 32 & temperature <= 50 ~ "Cold",
+          temperature >= 51 & temperature <= 65 ~ "Cool",
+          temperature >= 66 & temperature <= 75 ~ "Mild",
+          temperature >= 76 & temperature <= 85 ~ "Warm",
+          temperature > 85                      ~ "Hot",
+          is.na(temperature)                    ~ "Inside"
+        ),
+        
+        # factor levels
+        levels = c(
+          "Freezing",
+          "Cold",
+          "Cool",
+          "Mild",
+          "Warm",
+          "Hot",
+          "Inside"
+        )
+      ),
+      
+      # convert wind to a factor
+      wind = factor(
+        # categories
+        case_when(
+          wind < 1 ~ "Calm",
+          wind >= 1 & wind <= 3   ~ "Light Air",
+          wind >= 4 & wind <= 7   ~ "Light Breeze",
+          wind >= 8 & wind <= 12  ~ "Gentle Breeze",
+          wind >= 13 & wind <= 18 ~ "Moderate Breeze",
+          wind >= 19 & wind <= 24 ~ "Fresh Breeze",
+          wind >= 25 & wind <= 31 ~ "Strong Breeze",
+          wind >= 32 & wind <= 38 ~ "Near Gale",
+          wind >= 39 & wind <= 46 ~ "Gale",
+          is.na(wind)             ~ "Inside"
+        ),
+        
+        # factor levels
+        levels = c(
+          "Calm",
+          "Light Air",
+          "Light Breeze",
+          "Gentle Breeze",
+          "Moderate Breeze",
+          "Fresh Breeze",
+          "Strong Breeze",
+          "Near Gale",
+          "Gale",
+          "Inside"
+        )
+      ),
+      
+      # convert roof to a factor
+      roof = factor(
+        recode(
+          roof,
+          "closed" = "dome",
+          "open" = "dome"
+        )
+      )
+    ) |> 
+    # select columns to use in modeling
+    select(
+      game_id,
+      season,
+      week,
+      home_team,
+      away_team,
+      over:avg_drive_time_sec_away_team,
+      opposing_pass_rate_home_team:avg_drive_time_sec_allowed_away_team,
+      avg_total_yards_allowed_ma4_home_team,
+      avg_total_yards_allowed_ma4_away_team,
+      avg_total_yards_ma4_home_team,
+      avg_total_yards_ma4_away_team,
+      ppg_ma4_home_team,
+      ppg_ma4_away_team,
+      ppg_allowed_ma4_home_team,
+      ppg_allowed_ma4_away_team,
+      starts_with("net_"),
+      hour_time_difference,
+      temperature,
+      wind,
+      roof
+    ) |> 
+    # drop NAs (remove weeks 2-4)
+    drop_na(
+      starts_with("net")
+    )
+}
+
+```
+
+
+## Introduction
+
+After two weeks of the 2024 NFL season, NFL experts and fans could claim that the New Orleans Saints may be Super Bowl contenders. In week 1, they beat the lowly Carolina Panthers 47-10 in New Orleans. That win was not as significant until after week 2, when the Saints marched into AT&T Stadium in Dallas and thumped the Cowboys 44-19. The New Orleans Saints looked like a complete team. Their offense averaged 45.5 points per game while their defense held opponents to 14.5 points per game. They had a point differential of +62 after two weeks. The New Orleans Saints caught most NFL fans’ attention after their unexpected performances. Also, they caught the eye of sportsbooks. The Philadelphia Eagles were traveling to New Orleans to play the Saints. The Eagles were scoring 28 and allowing 25 points per game. Fans were excited to watch a high-scoring affair… while making a profit. The total over/under line, a bet on the total number of points scored in a game, was set at 49. 
+
+
+```{r}
+# New Orleans Saints Hot Start
+game_total_lines |> 
+  filter(
+    season == 2024,
+    home_team == "NO" |
+    away_team == "NO"
+  ) |> 
+  head(n = 3) |> 
+  # remove game ID
+  select(
+    -game_id
+  ) |> 
+  # blank on week 3
+  mutate(
+    total_home_score = c("47", "19", ""),
+    total_away_score = c("10", "44", ""),
+    total_score = c("57", "63", ""),
+    over = c("1", "1", "")
+  ) |> 
+  # gt table
+  gt() |> 
+  # align columns
+  cols_align(
+    align = "center"
+  ) |> 
+  # label columns
+  cols_label(
+    season = "Season",
+    home_team = "Home Team",
+    away_team = "Away Team",
+    week = "Week",
+    total_home_score = "Home Score",
+    total_away_score = "Away Score",
+    total_score = "Total Score",
+    total_line = "O/U Line",
+    over = "Over",
+  ) |> 
+  # format numerical columns
+  fmt_number(
+    columns = c(
+      total_home_score,
+      total_away_score,
+      over
+    ),
+    decimals = 0
+  ) |> 
+  fmt_number(
+    columns = c(
+      total_line
+    ),
+    decimals = 1
+  ) |> 
+  # title and subtitle
+  tab_header(
+    title = md("**New Orleans Saints Hot Start**"),
+    subtitle = md("*Data: nflreadr*")
+  ) |> 
+  # footnote
+  tab_footnote(
+    footnote = md("*Note: Over = 1, Under = 0*")
+  ) |> 
+  # theme
+  gt_theme_espn()
+  
+```
+
+Sports bettors were overzealous to “take the over.” The Saints have been scoring nearly 49 themselves. Is sports betting really that easy? Can we really predict sports?
+
+```{r}
+# New Orleans Saints Hot Start
+game_total_lines |> 
+  filter(
+    season == 2024,
+    home_team == "NO" |
+    away_team == "NO"
+  ) |> 
+  head(n = 3) |> 
+  # remove game ID
+  select(
+    -game_id
+  ) |> 
+  # gt table
+  gt() |> 
+  # align columns
+  cols_align(
+    align = "center"
+  ) |> 
+  # label columns
+  cols_label(
+    season = "Season",
+    home_team = "Home Team",
+    away_team = "Away Team",
+    week = "Week",
+    total_home_score = "Home Score",
+    total_away_score = "Away Score",
+    total_score = "Total Score",
+    total_line = "O/U Line",
+    over = "Over",
+  ) |> 
+  # format numerical columns
+  fmt_number(
+    columns = c(
+      total_home_score,
+      total_away_score,
+      over
+    ),
+    decimals = 0
+  ) |> 
+  fmt_number(
+    columns = c(
+      total_line
+    ),
+    decimals = 1
+  ) |> 
+  # title and subtitle
+  tab_header(
+    title = md("**New Orleans Saints Hot Start**"),
+    subtitle = md("*Data: nflreadr*")
+  ) |> 
+  # footnote
+  tab_footnote(
+    footnote = md("*Note: Over = 1, Under = 0*")
+  ) |> 
+  # theme
+  gt_theme_espn()
+```
+
+Probably not. The Saints led 3-0 going into the fourth quarter. The promised shootout turned into a defensive slugfest that made bettors wonder, “How could this have happened?” The Eagles won the game 15-12 by scoring a touchdown with a minute left and forcing a Derek Carr interception. Some NFL fans assumed this was a blip and wondered if we could see a playoff rematch. 
+
+```{r}
+#| fig-width: 12
+#| fig-height: 6
+
+offensive_metrics |> 
+  filter(
+    week >= 3,
+    season == 2024
+  ) |> 
+  # group by team
+  group_by(
+    team
+  ) |> 
+  # points per game from weeks 3 - 18
+  summarize(
+    ppg = mean(points)
+  ) |> 
+  # plot
+  ggplot(
+    aes(
+      # x axis
+      x = fct_reorder(team, ppg),
+      # y axis
+      y = ppg
+    )
+  ) +
+  # column
+  geom_col(
+    aes(color = team, fill = team)
+  ) +
+  # scale fill value
+  scale_color_nfl(type = "secondary") +
+  # scale fill opacity
+  scale_fill_nfl(alpha = 0.4) +
+  # mean points scored
+  geom_hline(
+    # line at 50%
+    yintercept = offensive_metrics |> 
+      filter(
+        week >= 3,
+        season == 2024
+      ) |> 
+      # group by team
+      group_by(
+        team
+      ) |> 
+      # points per game from weeks 3 - 18
+      summarize(
+        ppg = mean(points)
+      ) |> 
+      pull(ppg) |> 
+      mean(),
+    # color
+    color = "black",
+    # dashed line
+    linetype = "dashed",
+    # size
+    linewidth = 1.25
+  ) +
+  # scale y axis
+  scale_y_continuous(
+    # breaks
+    breaks = seq(0, 35, 5)
+  ) +
+  # labels
+  labs(
+    y = "Points Per Game",
+    title = "The Saints Only Scored More Points Than the Browns After Week 2"
+  ) +
+  # custom theme
+  nfl_bar_theme()
+```
+
+The New Orleans Saints struggled with injuries and underperformance for the rest of the year. They only scored more points than the quarterback-depleted Cleveland Browns after week 2. This is to show that sports are not predictable, and anything can happen. 
+
+
+## Research Question
+
+Knowing how difficult is to predict sports, my goal for this project is to identify the most significant factors influencing the total over/under line of NFL games. The total over/under line represents a bet on the total number of points scored in a game. If a gambler wagers that the actual points scored will exceed the line, they bet the “over.” If the teams score more than the line, the gambler wins the bet. Conversely, if the teams score less than the line, the gambler loses the bet. The process operates similarly for those who wager that the actual points scored will be less than the line or the “under.” If the teams’ combined score equals the line, the bet is tied, and no money is exchanged. My target accuracy goal is 52.4% because sports gamblers must win or cover bets at least 52.4% of the time to be profitable. I am treating the over/under as a classification task because I am not trying to see what impacts the total line. 
+
+
+## Literature Review
+
+Most literature on NFL betting focuses on the point spread as the primary wager of interest. The spread represents the number of points by which one team, the favorite, is favored over the opponent, the underdog. However, some articles discuss the total over/under line. 
+
+  The first article is the *Factors Affecting Scoring in NFL Games and Beating the Over/Under Line* by C. Barry Pfitzner, Steven D. Lang, and Tracy D. Rishel (2014). They attempt to predict the total points scored in NFL games for the 2010-11 season. They fit separate regression equations to predict the total number of points scored for the home and away teams based on information known before the game. Then, the sum of the predictions is compared to the over/under line to determine if a successful betting strategy can be identified. The variables they used include: total points scored, offensive yards, defensive yards (yards allowed by the defense), giveaways (offensive turnovers), takeaways (defensive forced turnovers), inside or outside, and points scored by a team in the previous game. Also, they created additive variables for yards and turnovers to quantify the matchup. Their regression model successfully produced a winning percentage of 55.4% for all games. 
+
+  Sebastian Juuri (2023) used machine learning to predict the outcomes of NFL games, and determined which statistics and in-game events weigh most heavily on the outcomes. In *Predicting the Results of NFL Games Using Machine Learning*, Juuri used Pro Football Focus data as his predictors. He used logistic regression, random forest, and support vector machines as his classification models. All of his models were at least 85% accurate. 
+
+
+## Data Sources
+
+I obtained my data from the nflreadr library in R, which contains play-by-play data. I used the 2021 to 2024 seasons to train and test my models. I aggregated the play-by-play data so each observation was a game with home and away teams, their statistics, and whether or not the over hit, which is a binary 0 or 1 variable. The metrics are the average of the previous weeks going into the matchup. The first factors I included were offensive variables for each team. The variables include: average total yards, points per game, possessions per game, pass rate over expected (PROE), expected points added (EPA), giveaways per game, and average time of drive (in seconds). I included possession-related statistics because teams that have the ball more have more opportunities to score. Similarly, teams that score faster will most likely have more opportunities to score. PROE is how much above or below expectations an offense calls a passing play. For example, in the Saints-Panthers game, the Panthers were down a lot of points. They are expected to pass the ball on 1st and 10 on a new drive. If they run the ball, that results in a negative PROE. Each play in the nflreadr play-by-play data has a variable called xpass, which is the probability that the play will be a pass. PROE is the difference between pass (a binary variable of 0 or 1) and the expected pass. Expected points (EP) is the number of points teams scored in similar situations. Expected points added (EPA) is the difference between ending expected points and starting expected points for a play. If a team scores a 70-yard touchdown on 1st and 10, the EPA would be very high because that does not happen often. The defensive metrics are the same as the offensive metrics, except they are what the defense allows. Instead of total yards, the defensive equivalent is total yards allowed. Also, I considered independent factors such as temperature (in Fahrenheit), wind (in mph), indoors or outdoors, and the hour time difference between the home and away teams. For example, if the Pittsburgh Steelers went to Los Angeles to play the Rams, that is a three-hour time difference. I suspected that jet lag and other long-distance traveling may influence a team's ability to perform well. 
+
+```{r}
+## data for the models
+nfl_model_data |>
+  # select columns
+  select(
+    season, 
+    home_team,
+    away_team,
+    week,
+    over,
+    avg_total_yards_home_team,
+    avg_total_yards_allowed_ma4_away_team,
+    net_ppg,
+    net_offensive_yards_ma4
+  ) |>
+  # slice head
+  slice_head(
+    n = 17
+  ) |> 
+  # gt table
+  gt() |> 
+  # align columns
+  cols_align(
+    align = "center"
+  ) |> 
+  # label columns
+  cols_label(
+    season = "Season",
+    home_team = "Home Team",
+    away_team = "Away Team",
+    week = "Week",
+    over = "Over",
+    avg_total_yards_home_team = md("Home Team:<br>Avg Total Yards"),
+    avg_total_yards_allowed_ma4_away_team = md("Away Team:<br>MA of Avg Total Yards Allowed"),
+    net_ppg = "Matchup Strength Points Per Game",
+    net_offensive_yards_ma4 = "MA of Matchup Strength Offensive Yards"
+  ) |> 
+  # format numerical columns
+  fmt_number(
+    columns = c(
+      avg_total_yards_home_team,
+      avg_total_yards_allowed_ma4_away_team,
+      net_ppg,
+      net_offensive_yards_ma4
+    ),
+    decimals = 2
+  ) |> 
+  # disable row striping
+  opt_row_striping(FALSE) |> 
+  # add color
+  data_color(
+    # columns
+    columns = c(
+      avg_total_yards_home_team,
+      net_ppg,
+      net_offensive_yards_ma4
+    ),
+    # scale
+    fn = scales::col_numeric(
+      palette = c("dodgerblue4", "white", "goldenrod"), 
+      domain = NULL
+    )
+  ) |> 
+  # this needs to be in reverse since it is a defensive statistic (lower = better)
+  data_color(
+    # columns
+    columns = c(
+      avg_total_yards_allowed_ma4_away_team
+    ),
+    # scale
+    fn = scales::col_numeric(
+      palette = c("goldenrod", "white", "dodgerblue4"), 
+      domain = NULL
+    )
+  ) |> 
+  # title and subtitle
+  tab_header(
+    title = md("**NFL Game-by-Game Stats**"),
+    subtitle = md("*Data: nflreadr*")
+  ) |> 
+  # footnote
+  tab_footnote(
+    footnote = md("*Note: Over = 1, Under = 0*")
+  ) |> 
+  # theme
+  gt_theme_espn() |> 
+  # force numerical columns text to be black
+  tab_style(
+    style = cell_text(color = "black"),
+    locations = cells_body(columns = where(is.numeric))
+  ) |> 
+  # disable Quarto table processing
+  tab_options(quarto.disable_processing = TRUE)
+```
+
+
+The table above shows examples of four different categories of variables: non-transformed (e.g., “Home Team: Avg Total Yards”), moving average (e.g., “Away Team: MA of Avg Total Yards Allowed”), matchup strength (e.g., “Matchup Strength Points Per Game”), and moving average of matchup strength (e.g., "MA of Matchup Strength Offensive Yards"). The moving average statistics are an average of the previous four weeks to account for performance changes throughout the season. This is an extension of Pfitzner et al.’s (2014) previous game statistics. The matchup strength is the difference between the home and away teams. For example, matchup strength points per game is the home offense points per game minus the away defense points per game allowed. The more positive the number is, the stronger each teams' side of the ball is. The first game on the table is the Kansas City Chiefs against the Buffalo Bills. The matchup strength points per game is a high positive number, which means the Chiefs’ offense is scoring a lot, and the Bills’ defense is preventing their opponents from scoring. The more negative the number is, the weaker each teams' side of the ball is. It indicates that neither team is good. The closer to zero means there is a mismatch between the teams. The matchup strength is subtractive instead of additive compared to Pfitzner et al. (2014), but accomplishes the same goal of quantifying how the two teams compare. I only used data after week four for each season because, as mentioned earlier in the New Orleans Saints example, a decent sample size is needed. 
+
+
+## Modeling
+
+```{r}
+#| output: false
+#| echo: false
+## run the models
+
+## set seed
+set.seed(1534)
+
+
+## create folds
+folds <- createFolds(
+  # target
+  nfl_model_data$over,
+  
+  # number of folds
+  k = 10,
+  
+  # list
+  list = TRUE,
+  
+  # return training set
+  returnTrain = FALSE
+)
+
+
+## store results
+### final predictions
+all_predictions <- rep(NA, nrow(nfl_model_data))
+
+### fold predictions
+all_model_preds <- matrix(NA, nrow = nrow(nfl_model_data), ncol = 5)
+colnames(all_model_preds) <- c("Logit", "RF", "XGB", "GAM", "SVM")
+
+
+## loop over folds
+for(i in seq_along(folds)){
+  # training and testing sets
+  ## test
+  test_index <- folds[[i]]
+  test <- nfl_model_data[test_index, ]
+  
+  ## training
+  train_index <- setdiff(
+    seq_len(nrow(nfl_model_data)), 
+    test_index
+  )
+  train <- nfl_model_data[train_index, ]
+  
+  ## data matrices (for XGBoost)
+  ### training
+  x_train <- train |> 
+    select(
+      net_epa_ma4,
+      net_proe_ma4,
+      net_offensive_possessions_ma4,
+      net_opposing_proe_ma4,
+      net_giveaways_ma4,
+      net_takeaways_ma4
+    ) |> 
+    data.matrix()
+  
+  
+  ### testing
+  x_test <- test |> 
+    select(
+      net_epa_ma4,
+      net_proe_ma4,
+      net_offensive_possessions_ma4,
+      net_opposing_proe_ma4,
+      net_giveaways_ma4,
+      net_takeaways_ma4
+    ) |>
+    data.matrix()
+  
+  
+  # fit models on the training data
+  ## logistic model
+  logit_nfl_model <- glm(
+    # formula
+    over ~ 
+      avg_total_yards_ma4_home_team:avg_total_yards_allowed_ma4_away_team +
+      avg_total_yards_ma4_away_team:avg_total_yards_allowed_ma4_home_team,
+    
+    # data 
+    data = train,
+    
+    # family
+    family = "binomial"
+  )
+  
+  ## random forest
+  rf_nfl_model <- ranger(
+    over ~ net_epa_ma4 + net_proe_ma4 + net_offensive_possessions_ma4 + net_opposing_proe_ma4 + net_epa_allowed_ma4 + 
+      net_giveaways_ma4 + net_takeaways_ma4,
+    num.trees = 1000,
+    importance = "impurity",
+    data = train
+  )
+  
+  ## xgboost
+  xgboost_nfl_model <- xgboost(
+    data = x_train, 
+    label = as.vector(train$over),
+    objective = "binary:logistic",
+    nrounds = 60,
+    params = list(
+      max_depth = 3,
+      eta = 0.10,
+      gamma = 0.1,
+      colsample_bytree = 0.6,
+      min_child_weight = 1,
+      subsample = 0.6
+    ),
+    verbose = 0
+  )
+  
+  ## GAM
+  gam_nfl_model <- gam(
+    # formula
+    over ~
+      s(net_proe_ma4) +
+      s(net_opposing_proe_ma4) +
+      s(net_epa_ma4) +
+      s(net_epa_allowed_ma4),
+    # family
+    family = "binomial",
+    # method
+    method = "REML",
+    # data
+    data = train
+  )
+  
+  ## SVM
+  SVM_nfl_model <- svm(
+    # formula
+    over ~ 
+      net_ppg + 
+      net_ppg_allowed +
+      net_giveaways +
+      net_takeaways +
+      net_proe +
+      net_opposing_proe,
+    
+    # kernel 
+    kernel = "radial",
+    
+    # cost
+    cost = 1,
+    
+    data = train,
+    
+    probability = TRUE
+  )
+  
+  ## get predicted probabilities
+  pred1 <- ifelse(
+    predict(logit_nfl_model, test, type = "response") > 0.5,
+    1,
+    0
+  )
+  pred2 <- ifelse(
+    predict(rf_nfl_model, test)$predictions > 0.5,
+    1,
+    0
+  )
+  pred3 <- ifelse(
+    predict(xgboost_nfl_model, x_test) > 0.5,
+    1,
+    0
+  )
+  pred4 <- ifelse(
+    predict(gam_nfl_model, test, type = "response") > 0.5,
+    1,
+    0
+  )
+  pred5 <- ifelse(
+    predict(SVM_nfl_model, test) > 0.5,
+    1,
+    0
+  )
+  
+  
+  ## store predictions for current fold
+  all_model_preds[test_index, ] <- cbind(pred1, pred2, pred3, pred4, pred5)
+  
+  
+  ## combine into a matrix
+  prediction_matrix <- cbind(
+    pred1, pred2, pred3, pred4, pred5
+  )
+  
+  
+  ## hard voting
+  vote_prediction <- apply(prediction_matrix, 1, function(x) {
+    # Find the most common class label (majority vote)
+    ux <- unique(x)
+    ux[which.max(tabulate(match(x, ux)))]
+  })
+  
+  
+  ## final prediction
+  all_predictions[test_index] <- vote_prediction
+}
+```
+
+
+
+Since the over/under variable is binary, I used classification models. I utilized logistic regression, random forest, XGBoost, general additive model (GAM), support vector machine, and a voting classifier. All the modeling techniques can handle nonlinear data, and the decision tree-based methods can capture complex relationships that others may not be able to. Additionally, I created a hard voting classifier, where all five models predict whether the over or under will hit, and the majority classification is the predicted class. Variable selection was determined using EDA and subjective judgment. The models that performed the best were put into the voting classifier. All models were trained on 10-fold cross-validation. 
+
+
+```{r}
+tibble(
+  model = c(
+    "Logit",
+    "RF",
+    "XGB",
+    "GAM",
+    "SVM",
+    "Ensemble"
+  ),
+  accuracy = c(
+    accuracy(nfl_model_data$over, all_model_preds[,1]),
+    accuracy(nfl_model_data$over, all_model_preds[,2]),
+    accuracy(nfl_model_data$over, all_model_preds[,3]),
+    accuracy(nfl_model_data$over, all_model_preds[,4]),
+    accuracy(nfl_model_data$over, all_model_preds[,5]),
+    0.5159
+  )
+) |> 
+  ggplot(
+    aes(
+      x = fct_reorder(model, accuracy),
+      y = accuracy
+    )
+  ) +
+  # columns
+  geom_col(
+    fill = "#013369"
+  ) +
+  # line at 53%
+  geom_hline(
+    # line at 53%
+    yintercept = 0.524,
+    # color
+    color = "#D50A0A",
+    # dashed line
+    linetype = "dashed",
+    # size
+    linewidth = 1.25
+  ) +
+  # scale y axis
+  scale_y_continuous(
+    # convert to a percentage
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  # change plot zoom
+  coord_cartesian(ylim = c(0.40, 0.60)) +
+  # labels
+  labs(
+    x = "Models",
+    y = "Test Accuracy",
+    title = "Logistic Regression Performs the Best"
+  ) +
+  # custom theme
+  nfl_plot_theme()
+```
+
+  The red dashed line indicates the test accuracy goal of 52.4%, which is the target gamblers aim for to achieve profitability. The only two models that reached this goal were logistic regression, at approximately 55%, and XGBoost, at around 53.5%.
+  
+  The logistic regression model performed the best with a test accuracy of about 55%. The only two variables were interaction terms that quantify how the home team’s offense matches up against the away team’s defense and vice versa. 
+  
+```{r}
+#| output: false
+#| echo: false
+
+## logistic model
+logit_nfl_model <- glm(
+  # formula
+  over ~ 
+    avg_total_yards_ma4_home_team:avg_total_yards_allowed_ma4_away_team +
+    avg_total_yards_ma4_away_team:avg_total_yards_allowed_ma4_home_team,
+  
+  # data 
+  data = nfl_model_data,
+  
+  # family
+  family = "binomial"
+)
+```
+
+
+```{r}
+## variables table
+logit_nfl_model |> 
+  broom::tidy() |> 
+  # mutate
+  mutate(
+    pred = c(
+      "Intercept",
+      "Home Team Avg Total Yards MA * Away Team Avg Total Yards Allowed MA",
+      "Away Team Avg Total Yards MA * Home Team Avg Total Yards Allowed MA"
+    )
+  ) |> 
+  select(
+    pred,
+    estimate,
+    std.error,
+    statistic,
+    p.value
+  ) |> 
+  # gt table
+  gt() |> 
+  # align columns
+  cols_align(
+    columns = c(pred),
+    align = "left"
+  ) |> 
+  # label columns
+  cols_label(
+    pred = "Predictors",
+    estimate = "Slope",
+    std.error = "Std Error",
+    statistic = "t-value",
+    p.value = "p-value"
+  ) |> 
+  # round for scientific notation
+  fmt_scientific(
+    columns = c(
+      estimate,
+      std.error
+    )
+  ) |> 
+  # round 3 decimals for t and p values
+  fmt_number(
+    columns = c(
+      statistic,
+      p.value
+    ),
+    decimals = 3
+  ) |> 
+  # title and subtitle
+  tab_header(
+    title = md("**Logistic Regression Model Predictors**")#,
+    #subtitle = md("*Best Model: Logistic Regression*")
+  ) |> 
+  # footnote
+  tab_footnote(
+    footnote = md("*Note: MA = Moving Average (4 weeks)*")
+  ) |> 
+  # theme
+  gt_theme_espn()
+```
+
+The above table shows the coefficients in terms of log-odds. Holding all other variables constant, each one unit increase in Home Team Avg Total Yards MA * Away Team Avg Total Yards Allowed MA, the log odds of the over hitting decrease by −0.00000977. Holding all other variables constant, each one unit increase in Away Team Avg Total Yards MA * Home Team Avg Total Yards Allowed MA, the log odds of the over hitting decrease by −0.00000454. Both appear to be small amounts; however, the variables are multiplicative and have a large scale. The first variable is significant at a significance level of 0.05 with a t-value of -2.692 and a p-value of 0.007. The second variable is not statistically significant; however, it remained in the model due to its relationship with the first variable. 
+	
+The XGBoost model performed the second best. The predictors in the model were Matchup Strength Takeaways MA, Matchup Strength Giveaways MA, Matchup Strength Opposing PROE MA, Matchup Strength PROE MA, Matchup Strength Offensive Possessions, and Matchup Strength EPA MA. 
+
+```{r}
+tibble(
+  variable = c(
+    "Matchup Strength Takeaways MA",
+    "Matchup Strength Giveaways MA",
+    "Matchup Strength Opposing PROE MA",
+    "Matchup Strength PROE MA",
+    "Matchup Strength Offensive Possessions",
+    "Matchup Strength EPA MA"
+  ),
+  var_imp = xgb.importance(model = xgboost_nfl_model)$Gain
+) |> 
+  # plot
+  ggplot(
+    aes(
+      # x axis
+      x = var_imp,
+      # y axis
+      y = fct_reorder(variable, var_imp)
+    )
+  ) +
+  # geom col
+  geom_col(
+    # color
+    color = "black",
+    # fill
+    fill = "#013369"
+  ) +
+  # labels
+  labs(
+    x = "Variable Importance",
+    y = "Predictor",
+    title = "XGBoost Variable Importance",
+    caption = "Note: MA = Moving Average (4 weeks)"
+  ) +
+  # custom theme
+  nfl_plot_theme()
+```
+
+XGBoost is an efficient and flexible decision tree-based method. Compared to random forests, it requires more work to tune properly. Since it is in the decision tree family, it has a variable importance feature. The XGBoost variable importance plot reveals that holding onto the ball is very important. A team that forces turnovers and doesn’t turn over the ball is likely to score more, which increases the chances of the over hitting. The opposite can be said for a team that can not hold on to the ball or force turnovers. 
+	
+Both models reveal two key points to consider when determining the over/under. The first is that matchup strength is very important. The most important variables in the logistic regression and XGBoost models are quantifying how two teams will play against each other. One team’s performance is not significant enough to outweigh how an opponent will match up with them. The second key point is that recent performance is more indicative than whole-season trends. The NFL season is long enough for a team’s performance to fluctuate. Some teams get hot (or cold) at the right times. For example, after two weeks, the 2024 New Orleans Saints appeared to be a force to be reckoned with in the NFC. Another example is the 2020 Pittsburgh Steelers, who started with an 11-0 record before losing 5 of 6, including a loss to the Cleveland Browns in the first round of the playoffs. The logistic regression and XGBoost models show that holding onto the ball, matchup strength, and recent performance are indicators of the over/under.
+
+
+## Discussion
+
+Using classification methods, including logistic regression and XGBoost, I identified the variables that are important in determining the over/under. The logistic regression and XGBoost models indicate that holding onto the ball, matchup strength, and recent performance are predictors of the over/under. As mentioned earlier, teams that limit offensive turnovers and force turnovers on defense increase the number of possessions and possible scoring opportunities. Teams that can not hold onto the ball or force turnovers lose precious opportunities to put up points on the board. Additionally, how a team stacks up against their opponent is key to outcome of the game. A pass-heavy team can be stopped in their tracks by one of the best secondaries in the league, which can derail an entire offensive gameplan. Finally, a team's recent performance highlights trends that may not be seen through total season stats. For example, The 2023 Tampa Bay Buccaneers were 4-7 before a 6-1 stretch highlighted by a Wild Card 32-9 win over the Philadelphia Eagles. Over those last seven games, the offense scored 26.9 points per game compared to the 17.5 points per game over the first eleven games.
+
+Significant feature engineering was required to quantify the complexities of an NFL game; however, there are still some limitations with these models. The most important factor that was not accounted for is the individual team impact. Every team in the NFL has different coaches and schemes. 
+
+
+```{r}
+#| fig-width: 12
+#| fig-height: 6
+
+## over by home team
+home_team_over <- nfl_team_week_data |> 
+  # group by home team
+  group_by(home_team) |> 
+  summarize(
+    over_prop = sum(over) / n()
+  ) |> 
+  # plot
+  ggplot(
+    aes(
+      # x axis
+      x = home_team,
+      # y axis
+      y = over_prop
+    )
+  ) +
+  # column
+  geom_col(
+    aes(color = home_team, fill = home_team)
+  ) +
+  # scale fill value
+  scale_color_nfl(type = "secondary") +
+  # scale fill opacity
+  scale_fill_nfl(alpha = 0.4) +
+  # line at 50%
+  geom_hline(
+    # line at 50%
+    yintercept = 0.50,
+    # color
+    color = "#D50A0A",
+    # dashed line
+    linetype = "dashed",
+    # size
+    linewidth = 1.25
+  ) +
+  # scale y axis
+  scale_y_continuous(
+    # breaks
+    breaks = seq(0, 0.60, 0.10),
+    # limits
+    limits = c(0, 0.65),
+    # convert to a percentage
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  # labels
+  labs(
+    y = "Pecentage of Games the Over Hit",
+    title = "At Home"
+  ) +
+  # custom theme
+  nfl_bar_theme() +
+  # remove x axis
+  theme(
+    axis.text.x = element_blank()
+  )
+
+
+## over by away team
+away_team_over <- nfl_team_week_data |> 
+  # group by home team
+  group_by(away_team) |> 
+  summarize(
+    over_prop = sum(over) / n()
+  ) |> 
+  # plot
+  ggplot(
+    aes(
+      # x axis
+      x = away_team,
+      # y axis
+      y = over_prop
+    )
+  ) +
+  # column
+  geom_col(
+    aes(color = away_team, fill = away_team)
+  ) +
+  # scale fill value
+  scale_color_nfl(type = "secondary") +
+  # scale fill opacity
+  scale_fill_nfl(alpha = 0.4) +
+  # line at 50%
+  geom_hline(
+    # line at 50%
+    yintercept = 0.50,
+    # color
+    color = "#D50A0A",
+    # dashed line
+    linetype = "dashed",
+    # size
+    linewidth = 1.25
+  ) +
+  # scale y axis
+  scale_y_continuous(
+    # breaks
+    breaks = seq(0, 0.60, 0.10),
+    # limits
+    limits = c(0, 0.65),
+    # convert to a percentage
+    labels = scales::percent_format(accuracy = 1)
+  ) +
+  
+  # labels
+  labs(
+    y = "Pecentage of Games the Over Hit",
+    title = "On the Road"
+  ) +
+  # custom theme
+  nfl_bar_theme()
+
+
+
+## combine the two plots
+home_team_over / away_team_over + plot_layout(axes = "collect")
+```
+
+Mike Tomlin is an old-school coach. He wants an offense that relies on the run game, contrary to the modern NFL, and a defense that will make it tough to score. This style leads to low-scoring games, as seen with the Pittsburgh Steelers hitting the over about 30% of the time at home. Zac Taylor, the head coach of the Cincinnati Bengals, lets quarterback Joe Burrow dominate the opposing defense; however, their soft defense allows a lot of points. That combination leads to the over hitting 60% of the time at home for the Bengals. A way to factor in each team’s play style is to utilize hierarchical modeling. Hierarchical modeling accounts for each team and leverages all teams’ performance to provide a better estimate of an individual team. Another thing that is difficult to quantify is the impact of injuries. The moving average variables attempt to account for that, but do injuries are not directly quantified. If a team with the best running back in the NFL lost that running back to injury, their moving average of total yards should decrease. The variables show that the performance differs. However, it does not quantify the impact of losing that player.  
+
+
+## References
+C. Barry Pfitzner, Steven D. Lang, and Tracy D. Rishel (2014, February 14). Factors Affecting Scoring in NFL Games and Beating the Over/Under Line. The Sport Journal. https://thesportjournal.org/article/factors-affecting-scoring-in-nfl-games-and-beating-the-overunder-line/
+
+Juuri, S. (2023). PREDICTING THE RESULTS OF NFL GAMES USING MACHINE LEARNING. https://aaltodoc.aalto.fi/server/api/core/bitstreams/80b6e0d0-f5d1-4c19-abd3-667ee40d9c93/content
